@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GAnime</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Theme pre-paint (2026-10-24): the splash logo's gradient
+         stops carry green hex fallbacks, and --accent only exists
+         once app.js runs — so the first paint showed a GREEN logo
+         that snapped to the theme colour a moment later. This tiny
+         blocking script sets the same --accent vars from the same
+         saved settings BEFORE first paint, so the splash is born
+         in the theme colour. applyTheme() later sets identical
+         values, so nothing visibly changes when it runs. -->
+    <script>
+    (function () {
+        /* Splash skip (2026-10-24): if this tab already played it,
+           hide the splash before first paint (init() skips it too). */
+        try { if (sessionStorage.getItem('ganime_splash_played')) document.documentElement.classList.add('splash-skip'); } catch (e) {}
+        try {
+            var presets = { white: ['#ffffff', '#d4d4d4'], crimson: ['#ef2d3f', '#b91c1c'], ocean: ['#2196f3', '#1565c0'], violet: ['#9c27b0', '#6a1b9a'], emerald: ['#4caf50', '#2e7d32'], amber: ['#ff9800', '#e65100'], rose: ['#e91e63', '#ad1457'] };
+            var activeId = localStorage.getItem('ganime_active_profile_id') || '';
+            if (!activeId) {
+                try {
+                    var profs = JSON.parse(localStorage.getItem('ganime_profiles_list') || '[]');
+                    if (profs.length) activeId = profs[0].id;
+                } catch (e) {}
+            }
+            var raw = localStorage.getItem('ganime_settings_' + activeId);
+            var accentId = 'white';
+            if (raw) { try { accentId = JSON.parse(raw).accentId || 'white'; } catch (e) {} }
+            var p = presets[accentId] || presets.white;
+            var root = document.documentElement;
+            root.style.setProperty('--accent', p[0]);
+            root.style.setProperty('--accent-secondary', p[1]);
+            root.style.setProperty('--accent-glow', p[0] + '44');
+root.style.setProperty('--on-accent', (accentId === 'white' || accentId === 'amber') ? '#101418' : '#ffffff');
+        } catch (e) { /* fall back to CSS defaults */ }
+    })();
+    </script>
+</head>
+<body>
+
+    <!-- SPLASH: inline animated logo (2026-10-24). Inline SVG so
+         CSS drives the motion — a smooth stroke draw + fold,
+         then the letters stagger in. Method ported from the
+         reference build's BootSplash; mark + choreography ours. -->
+    <div id="splashScreen" class="splash-screen">
+        <svg class="splash-logo" viewBox="0 0 1024 512" role="img" aria-label="GAnime">
+            <defs>
+                <linearGradient id="splashGrad" gradientUnits="userSpaceOnUse" x1="120" y1="512" x2="900" y2="0">
+                    <stop class="lg0" offset="0" stop-color="#064E3B"/><stop class="lg1" offset="0.45" stop-color="#059669"/><stop class="lg2" offset="0.75" stop-color="#10B981"/><stop class="lg3" offset="1" stop-color="#A3E635"/>
+                </linearGradient>
+            </defs>
+            <g class="splash-slide">
+                <g transform="translate(512,256)">
+                    <g class="splash-fold">
+                        <g transform="scale(0.58) translate(-256,-256)">
+                            <path class="splash-path" d="M 300 300 L 105 430 L 265 95 L 415 415"
+                                fill="none" stroke="url(#splashGrad)" stroke-width="50"
+                                stroke-linejoin="miter" stroke-miterlimit="12" stroke-linecap="butt"/>
+                        </g>
+                    </g>
+                </g>
+            </g>
+            <g font-family="'JetBrains Sans','DejaVu Sans',sans-serif" font-size="185" font-weight="bold" fill="url(#splashGrad)">
+                <text class="splash-letter" style="animation-delay:1.02s" x="398" y="350">n</text>
+                <text class="splash-letter" style="animation-delay:1.14s" x="528" y="350">i</text>
+                <text class="splash-letter" style="animation-delay:1.26s" x="588" y="350">m</text>
+                <text class="splash-letter" style="animation-delay:1.38s" x="772" y="350">e</text>
+            </g>
+        </svg>
+    </div>
+
+    <!-- ENTRY: SIGN-IN GATE -->
+    <section id="authGateScreen" class="full-screen-gate hidden">
+        <div class="gate-card">
+            <div class="brand-logo"><svg class="tb-mark brand-mark" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="gateGrad1" gradientUnits="userSpaceOnUse" x1="60" y1="512" x2="450" y2="0"><stop class="lg0" offset="0" stop-color="#064E3B"/><stop class="lg1" offset="0.45" stop-color="#059669"/><stop class="lg2" offset="0.75" stop-color="#10B981"/><stop class="lg3" offset="1" stop-color="#A3E635"/></linearGradient></defs><g class="tb-fold"><path d="M 300 300 L 105 430 L 265 95 L 415 415" fill="none" stroke="url(#gateGrad1)" stroke-width="50" stroke-linejoin="miter" stroke-miterlimit="12" stroke-linecap="butt"/><path d="M 448 398 l 17 17 -17 17 -17 -17 Z" fill="url(#gateGrad1)"/></g></svg><span class="tb-nime brand-nime">nime</span></div>
+            <h1 class="gate-heading">Welcome back</h1>
+            <p class="gate-subtext">Sign in with your existing account</p>
+            <form class="gate-form" onsubmit="App.handleSignIn(event)">
+                <input type="email" id="authEmail" class="app-input" placeholder="Email address" required>
+                <input type="password" id="authPassword" class="app-input" placeholder="Password" required>
+                <button type="submit" class="btn-primary">Sign In</button>
+                <button type="button" class="btn-secondary" onclick="App.handleSignUp(this)">Create Account</button>
+                <button type="button" class="btn-text-link" onclick="App.handleForgotPassword()">Forgot password?</button>
+            </form>
+            <button class="btn-secondary" onclick="App.enterGuestMode()">Continue without an account</button>
+        </div>
+    </section>
+
+    <!-- ENTRY: PROFILE PICKER -->
+    <section id="profilePickerScreen" class="full-screen-gate hidden">
+        <div class="profile-picker-container">
+            <div class="brand-logo"><svg class="tb-mark brand-mark" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="gateGrad2" gradientUnits="userSpaceOnUse" x1="60" y1="512" x2="450" y2="0"><stop class="lg0" offset="0" stop-color="#064E3B"/><stop class="lg1" offset="0.45" stop-color="#059669"/><stop class="lg2" offset="0.75" stop-color="#10B981"/><stop class="lg3" offset="1" stop-color="#A3E635"/></linearGradient></defs><g class="tb-fold"><path d="M 300 300 L 105 430 L 265 95 L 415 415" fill="none" stroke="url(#gateGrad2)" stroke-width="50" stroke-linejoin="miter" stroke-miterlimit="12" stroke-linecap="butt"/><path d="M 448 398 l 17 17 -17 17 -17 -17 Z" fill="url(#gateGrad2)"/></g></svg><span class="tb-nime brand-nime">nime</span></div>
+            <h1 class="gate-heading">Who's watching?</h1>
+            <p class="gate-subtext">Select a profile to continue</p>
+            <div class="profiles-grid" id="profilesGridContainer"><!-- rendered by app.js --></div>
+            <div class="profile-picker-actions">
+                <button class="btn-secondary" onclick="App.openManageProfilesModal()">Manage Profiles</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ENTRY: ADD PROFILE (full screen, real-app style) -->
+    <section id="addProfileScreen" class="full-screen-gate hidden">
+        <div id="addProfileRoot" class="add-profile-root"><!-- rendered by app.js --></div>
+    </section>
+
+    <!-- APP VIEWPORT: all screens swap inside here -->
+    <main id="appViewport" class="app-viewport hidden">
+
+        <!-- TOP BAR (Fix 1): slim, fixed. Left = logo + name
+             (tap → Profile page). Right = quick profile swap. -->
+        <header id="topBar" class="top-bar">
+            <button class="tb-brand" onclick="App.logoHome()" title="GAnime — Home">
+                <svg class="tb-mark" viewBox="0 0 512 512" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="tbGrad" gradientUnits="userSpaceOnUse" x1="60" y1="512" x2="450" y2="0">
+                            <stop class="lg0" offset="0" stop-color="#064E3B"/><stop class="lg1" offset="0.45" stop-color="#059669"/><stop class="lg2" offset="0.75" stop-color="#10B981"/><stop class="lg3" offset="1" stop-color="#A3E635"/>
+                        </linearGradient>
+                    </defs>
+                    <g class="tb-fold">
+                        <path d="M 300 300 L 105 430 L 265 95 L 415 415" fill="none" stroke="url(#tbGrad)" stroke-width="50" stroke-linejoin="miter" stroke-miterlimit="12" stroke-linecap="butt"/>
+                        <path d="M 448 398 l 17 17 -17 17 -17 -17 Z" fill="url(#tbGrad)"/>
+                    </g>
+                </svg>
+                <span class="tb-nime">nime</span>
+            </button>
+            <div class="tb-right">
+                <div class="tb-swap" id="tbSwap"><!-- rendered by app.js --></div>
+            </div>
+        </header>
+
+        <!-- HOME -->
+        <section id="screen-home" class="spa-screen active-screen">
+            <div class="screen-pad">
+                <div id="homeHero"><!-- hero carousel: foundation+ --></div>
+                <div id="homeContinueWatching"></div>
+                <div id="homeRails"></div>
+            </div>
+        </section>
+
+        <!-- SEARCH -->
+        <section id="screen-search" class="spa-screen">
+            <div class="screen-pad">
+                <div id="searchBar"></div>
+                <div id="searchResults"></div>
+            </div>
+        </section>
+
+        <!-- CALENDAR -->
+        <section id="screen-calendar" class="spa-screen">
+            <div class="screen-pad">
+                <div id="calendarRoot"><!-- rendered by app.js --></div>
+            </div>
+        </section>
+
+        <!-- LIBRARY -->
+        <section id="screen-library" class="spa-screen">
+            <div class="screen-pad">
+                <div id="libraryControls"></div>
+                <div id="libraryGrid"></div>
+            </div>
+        </section>
+
+        <!-- LIVE TV (conditional screen) -->
+        <section id="screen-livetv" class="spa-screen">
+            <div class="screen-pad">
+                <div id="liveTvChannels"></div>
+                <div id="liveTvGuide"></div>
+            </div>
+        </section>
+
+        <!-- PROFILE + SETTINGS -->
+        <section id="screen-profile" class="spa-screen">
+            <div class="screen-pad">
+                <div id="profileHeader"></div>
+                <div id="settingsRoot"><!-- full settings map renders here --></div>
+            </div>
+        </section>
+
+        <!-- SUB-SCREENS (not tabs) -->
+        <section id="screen-seeall" class="spa-screen">
+            <div class="screen-pad" id="seeAllRoot"><!-- rendered by app.js --></div>
+        </section>
+        <section id="screen-details" class="spa-screen"></section>
+        <section id="screen-streams" class="spa-screen"></section>
+        <section id="screen-downloads" class="spa-screen"></section>
+    </main>
+
+    <!-- PLAYER OVERLAY -->
+    <!-- HOVER INFO PANEL (desktop; positioned by app.js) -->
+    <div id="hoverPanel" class="hover-panel hidden"></div>
+
+    <div id="playerOverlay" class="player-overlay hidden"></div>
+
+    <!-- MODALS ROOT -->
+    <div id="modalRoot"></div>
+
+    <!-- FLOATING PILL NAV: exact 4 tabs + conditional Live TV slot -->
+    <nav id="floatingNav" class="floating-pill-nav pos-bottom hidden">
+        <button class="nav-tab active" data-screen="screen-home" onclick="App.navTo('screen-home')">
+            <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+            <span>Home</span>
+        </button>
+        <button class="nav-tab" data-screen="screen-search" onclick="App.navTo('screen-search')">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <span>Search</span>
+        </button>
+        <button class="nav-tab" data-screen="screen-calendar" onclick="App.navTo('screen-calendar')">
+            <svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z"/></svg>
+            <span>Calendar</span>
+        </button>
+        <button class="nav-tab" data-screen="screen-library" onclick="App.navTo('screen-library')">
+            <svg viewBox="0 0 24 24"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
+            <span>Library</span>
+        </button>
+        <button id="navTabLiveTv" class="nav-tab hidden" data-screen="screen-livetv" onclick="App.navTo('screen-livetv')">
+            <svg viewBox="0 0 24 24"><path d="M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3c-1.1 0-2 .89-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.11-.9-2-2-2zm0 14H3V8h18v12zM9 10v8l7-4z"/></svg>
+            <span>Live TV</span>
+        </button>
+        <button class="nav-tab" data-screen="screen-profile" onclick="App.navTo('screen-profile')">
+            <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            <span>Settings</span>
+        </button>
+    </nav>
+
+    <!-- SCRIPTS: foundation order -->
+    <script src="js/config.js"></script>
+    <script src="js/firebase.js"></script>
+    <script src="js/storage.js"></script>
+    <!-- MOVI-ONLY TEST BUILD (2026-10-25): the legacy player scripts are
+         REMOVED here on purpose. movi handles HLS/DASH/MKV itself per its
+         docs (Shaka pipeline for .m3u8/.mpd, WebCodecs/WASM for MKV).
+         This file is otherwise identical to the original index.html. -->
+    <script type="module" src="https://cdn.jsdelivr.net/npm/movi-player@0.4.1/dist/element.js"></script>
+    <script src="js/anilist.js"></script>
+    <script src="js/addons.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
