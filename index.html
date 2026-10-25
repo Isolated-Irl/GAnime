@@ -80,8 +80,8 @@ root.style.setProperty('--on-accent', (accentId === 'white' || accentId === 'amb
             <h1 class="gate-heading">Welcome back</h1>
             <p class="gate-subtext">Sign in with your existing account</p>
             <form class="gate-form" onsubmit="App.handleSignIn(event)">
-                <input type="email" id="authEmail" class="app-input" placeholder="Email address" required>
-                <input type="password" id="authPassword" class="app-input" placeholder="Password" required>
+                <input type="email" id="authEmail" class="app-input" placeholder="Email address" autocomplete="email" required>
+                <input type="password" id="authPassword" class="app-input" placeholder="Password" autocomplete="current-password" required>
                 <button type="submit" class="btn-primary">Sign In</button>
                 <button type="button" class="btn-secondary" onclick="App.handleSignUp(this)">Create Account</button>
                 <button type="button" class="btn-text-link" onclick="App.handleForgotPassword()">Forgot password?</button>
@@ -199,7 +199,7 @@ root.style.setProperty('--on-accent', (accentId === 'white' || accentId === 'amb
     <!-- MODALS ROOT -->
     <div id="modalRoot"></div>
 
-    <!-- FLOATING PILL NAV: exact 4 tabs + conditional Live TV slot -->
+    <!-- FLOATING PILL NAV: 5 tabs + conditional Live TV slot -->
     <nav id="floatingNav" class="floating-pill-nav pos-bottom hidden">
         <button class="nav-tab active" data-screen="screen-home" onclick="App.navTo('screen-home')">
             <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>

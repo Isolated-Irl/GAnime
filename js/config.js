@@ -10,7 +10,7 @@ const Config = {
     /* GAnime's own OAuth client IDs, baked in so connecting a
        tracker never asks the user to type developer details.
        The AniList one is Isolated's client (54686, redirect =
-       the AniList PIN page). Simkl's goes here once his Simkl
+       ganime.pages.dev). Simkl's goes here once his Simkl
        app exists; until then the connect modal remembers the
        ID he pastes once. */
     OAUTH: {
@@ -31,8 +31,7 @@ const Config = {
         projectId: 'ganime-1a0a1',
         appId: '1:556800923220:web:36c9511b40d604bf03bfc1'
     },
-    DATA_VERSION: 3,   // bump to reset seeded local data (profiles) on next load
-    CREDITS: 'Built by Isolated (primalape) · UI skeleton modeled on Nuvio by Tapframe / NuvioMedia',
+    DATA_VERSION: 3,   // marker only — getProfiles() writes it and resets nothing
 
     // Theme swatches exactly as the real app's Layout page names them.
     ACCENT_PRESETS: [
@@ -97,17 +96,6 @@ const Config = {
         { id: 'spirited',  title: 'Spirited Away',                      year: 2001, score: 8.8, eps: 1,    type: 'Movie', hue: 130, genres: ['Fantasy', 'Adventure'], synopsis: 'A girl trapped in a bathhouse for spirits must work to free her parents.' },
         { id: 'mhm',       title: 'My Happy Marriage',                  year: 2023, score: 8.2, eps: 25,   type: 'TV',    hue: 350, genres: ['Romance', 'Drama', 'Fantasy'], synopsis: 'A mistreated daughter is married off to a commander rumoured to be cold-hearted.' }
     ],
-    HERO_IDS: ['frieren', 'solo', 'jjk', 'bleach'],
-    CONTINUE_WATCHING: [
-        { id: 'frieren', ep: 'EP 14 · The Hero of the South', progress: 62 },
-        { id: 'jjk', ep: 'EP 30 · Shibuya Incident', progress: 31 },
-        { id: 'apothecary', ep: 'EP 9 · The Maidservant', progress: 84 }
-    ],
-    HOME_RAILS: [
-        { title: 'Trending Now', ids: ['solo', 'jjk', 'frieren', 'onepiece', 'demonslayer', 'chainsaw', 'spyfamily', 'bleach'] },
-        { title: 'Popular This Season', ids: ['bleach', 'apothecary', 'mhm', 'edgerunners', 'solo', 'spyfamily', 'frieren', 'demonslayer'] },
-        { title: 'Top Anime Movies', ids: ['yourname', 'spirited'] }
-    ],
 
     // No default profile (2026-10-23 ruling): the app seeds NOTHING.
     // A new user creates their first profile to use the app; the
@@ -127,7 +115,7 @@ const Config = {
         contentWarnings: true,
         preferredAudioLanguage: 'Device language',
         secondaryAudioLanguage: 'None',
-        preferredSubtitleLanguage: 'None',
+        preferredSubtitleLanguage: 'English',
         secondarySubtitleLanguage: 'None',
         stripSDH: false,
         useForcedSubtitles: false,

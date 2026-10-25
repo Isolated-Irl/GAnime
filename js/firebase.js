@@ -14,7 +14,8 @@
 //  - NEVER put a Firebase service-account / Admin SDK key here.
 //    That key must never reach browser code or a public repo.
 //  - idToken expires in ~1 hour. We save refreshToken + expiresAt
-//    and refresh on boot / before use. Saving idToken alone (the
+//    and refresh in background on boot (app.js init) / before use.
+//    Saving idToken alone (the
 //    Gemini paste's bug) would break the session after 1 hour.
 //  - Sign In and Create Account are SEPARATE flows. Firebase
 //    returns INVALID_LOGIN_CREDENTIALS for both wrong password
@@ -51,11 +52,22 @@ const FirebaseAuth = {
     },
 
     async _post(url, body) {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
+        let res;
+        try {
+            res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(12000)
+            });
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                const err = new Error('Network timed out — check your connection and try again');
+                err.code = 'TIMEOUT';
+                throw err;
+            }
+            throw e;
+        }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             const msg = (data && data.error && data.error.message) || 'Authentication failed';
@@ -107,18 +119,29 @@ const FirebaseAuth = {
 
     async _refresh(refreshToken) {
         const c = this._cfg();
-        const res = await fetch(
-            'https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(c.apiKey),
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refreshToken)
+        let res;
+        try {
+            res = await fetch(
+                'https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(c.apiKey),
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refreshToken),
+                    signal: AbortSignal.timeout(12000)
+                }
+            );
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                const err = new Error('Session refresh failed');
+                err.code = 'TIMEOUT';
+                throw err;
             }
-        );
+            throw e;
+        }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             const err = new Error('Session refresh failed');
-            err.code = (data && data.error) || 'REFRESH_FAILED';
+            err.code = (data && data.error && (data.error.message || data.error.status)) || 'REFRESH_FAILED';
             throw err;
         }
         return {
@@ -132,7 +155,20 @@ const FirebaseAuth = {
     // Returns null only if there is no session or refresh is rejected
     // (e.g. revoked token). Network errors do NOT clear the session:
     // the caller keeps the old token and retries later.
+    _refreshPromise: null,
+    _lastRefreshPermanent: false,
+
     async getValidIdToken() {
+        /* Deduplicate concurrent refreshes: one in-flight promise,
+           cleared on settle so a failure is never cached forever. */
+        if (this._refreshPromise) return this._refreshPromise;
+        this._refreshPromise = this._getValidIdTokenInner();
+        try { return await this._refreshPromise; }
+        finally { this._refreshPromise = null; }
+    },
+
+    async _getValidIdTokenInner() {
+        this._lastRefreshPermanent = false;
         let auth = null;
         try { auth = (typeof Storage !== 'undefined' && Storage.getAuthState()) || null; } catch (e) { auth = null; }
         if (!auth || !auth.signedIn || auth.isGuest) return null;
@@ -144,7 +180,11 @@ const FirebaseAuth = {
             try { Storage.saveAuthState(next); } catch (e) {}
             return r.idToken;
         } catch (e) {
-            if (String(e.code || '').indexOf('INVALID_REFRESH_TOKEN') !== -1 || String(e.code || '').indexOf('TOKEN_EXPIRED') !== -1) return null;
+            const code = String(e.code || '');
+            if (code.indexOf('INVALID_REFRESH_TOKEN') !== -1 || code.indexOf('TOKEN_EXPIRED') !== -1 || code.indexOf('USER_DISABLED') !== -1 || code.indexOf('USER_NOT_FOUND') !== -1) {
+                this._lastRefreshPermanent = true;
+                return null;
+            }
             return auth.idToken || null;
         }
     }

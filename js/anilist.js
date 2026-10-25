@@ -22,11 +22,19 @@ const AniList = {
     `,
 
     async _post(query, variables) {
-        const res = await fetch(this.ENDPOINT, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ query, variables: variables || {} })
-        });
+        /* Retry ONCE on 429 only (Retry-After if present, else ~2s).
+           Never retry on 400/401/404. */
+        let res = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            res = await fetch(this.ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ query, variables: variables || {} })
+            });
+            if (res.status !== 429 || attempt === 1) break;
+            const ra = parseInt(res.headers && res.headers.get ? (res.headers.get('Retry-After') || '') : '', 10);
+            await new Promise(r => setTimeout(r, (isNaN(ra) ? 2 : ra) * 1000));
+        }
         if (!res.ok) {
             let detail = '';
             try {
@@ -60,6 +68,9 @@ const AniList = {
             .replace(/<[^>]+>/g, '')
             .replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'")
             .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+            /* Second tag-strip AFTER entity decoding, so an escaped
+               tag in a description cannot revive into a live tag. */
+            .replace(/<[^>]+>/g, '')
             .replace(/~![\s\S]*?!~/g, '');
         const first = text.split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
         return first.length > 300 ? first.slice(0, 297) + '…' : first;
@@ -316,14 +327,20 @@ const AniList = {
     },
 
     async _postAuth(query, variables, accessToken) {
-        const res = await fetch(this.ENDPOINT, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json', 'Accept': 'application/json',
-                'Authorization': 'Bearer ' + accessToken
-            },
-            body: JSON.stringify({ query, variables: variables || {} })
-        });
+        let res = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            res = await fetch(this.ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json', 'Accept': 'application/json',
+                    'Authorization': 'Bearer ' + accessToken
+                },
+                body: JSON.stringify({ query, variables: variables || {} })
+            });
+            if (res.status !== 429 || attempt === 1) break;
+            const ra = parseInt(res.headers && res.headers.get ? (res.headers.get('Retry-After') || '') : '', 10);
+            await new Promise(r => setTimeout(r, (isNaN(ra) ? 2 : ra) * 1000));
+        }
         if (!res.ok) {
             let detail = '';
             try {
@@ -370,7 +387,7 @@ const AniList = {
         }`;
         const data = await this._postAuth(query, { userId }, accessToken);
         const lists = (data && data.MediaListCollection && data.MediaListCollection.lists) || [];
-        const toDateNum = d => (d && d.year) ? (d.year * 10000 + (d.month || 1) * 100 + (d.day || 1)) : 0;
+        const toUnix = d => (d && d.year) ? Math.floor(Date.UTC(d.year, (d.month || 1) - 1, d.day || 1) / 1000) : 0;
         const out = {};
         lists.forEach(list => {
             const entries = (list.entries || []).map(e => ({
@@ -380,11 +397,15 @@ const AniList = {
                 score: e.score || 0,
                 updatedAt: e.updatedAt || 0,
                 createdAt: e.createdAt || 0,
-                completedAt: toDateNum(e.completedAt),
-                startedAt: toDateNum(e.startedAt),
+                completedAt: toUnix(e.completedAt),
+                startedAt: toUnix(e.startedAt),
                 media: this.mapMedia(e.media)
             })).filter(e => e.media && e.media.anilistId);
-            if (entries.length) out[list.status] = { name: list.name, entries };
+            if (entries.length) {
+                if (!out[list.status]) out[list.status] = { name: list.name, entries: [] };
+                const seen = new Set(out[list.status].entries.map(x => x.media && x.media.anilistId));
+                entries.forEach(x => { if (x.media && x.media.anilistId && !seen.has(x.media.anilistId)) { seen.add(x.media.anilistId); out[list.status].entries.push(x); } });
+            }
         });
         return out;
     },
@@ -398,7 +419,7 @@ const AniList = {
         const decls = ['$mediaId: Int', '$progress: Int', '$status: MediaListStatus'];
         const args = ['mediaId: $mediaId', 'progress: $progress', 'status: $status'];
         const vars = { mediaId, progress, status };
-        if (typeof ex.score === 'number' && ex.score > 0) { decls.push('$score: Float'); args.push('score: $score'); vars.score = ex.score; }
+        if (typeof ex.score === 'number' && ex.score >= 0) { decls.push('$score: Float'); args.push('score: $score'); vars.score = ex.score; }
         if (ex.notes) { decls.push('$notes: String'); args.push('notes: $notes'); vars.notes = ex.notes; }
         if (ex.startedAt) { decls.push('$startedAt: FuzzyDateInput'); args.push('startedAt: $startedAt'); vars.startedAt = ex.startedAt; }
         if (ex.completedAt) { decls.push('$completedAt: FuzzyDateInput'); args.push('completedAt: $completedAt'); vars.completedAt = ex.completedAt; }
@@ -537,7 +558,7 @@ const Trackers = {
                 hue: (malId * 47) % 360
             };
             const updatedTs = ls.updated_at ? Math.floor(new Date(ls.updated_at).getTime() / 1000) : 0;
-            const finishNum = ls.finish_date ? parseInt(String(ls.finish_date).replace(/-/g, ''), 10) || 0 : 0;
+            const finishTs = ls.finish_date ? Math.floor(new Date(ls.finish_date).getTime() / 1000) || 0 : 0;
             const entry = {
                 entryId: malId,
                 status: st,
@@ -545,7 +566,7 @@ const Trackers = {
                 score: ls.score || 0,
                 updatedAt: updatedTs,
                 createdAt: updatedTs,
-                completedAt: finishNum || (st === 'COMPLETED' ? updatedTs : 0),
+                completedAt: finishTs || (st === 'COMPLETED' ? updatedTs : 0),
                 startedAt: 0,
                 media
             };

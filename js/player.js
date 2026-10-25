@@ -74,7 +74,7 @@ const Player = {
     },
 
     _escLabel(s) {
-        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     },
 
     _langCode(codeOrName) {
@@ -135,6 +135,8 @@ const Player = {
                 display: flex; align-items: center; gap: 28px; pointer-events: none;
                 opacity: 1; transition: opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
             .gp-movi-top.gp-idle ~ #gpSeekCenter { opacity: 0; pointer-events: none; }
+            .gp-movi-top.gp-idle ~ #aniskipBtn { opacity: 0; pointer-events: none; }
+            #aniskipBtn { transition: opacity 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
             /* Loading phase: hide OUR centre cluster until the video actually
                plays, so movi's own loading spinner sits alone in the centre
                instead of stacking under our pause button. Removed on first play. */
@@ -255,7 +257,7 @@ const Player = {
                bar faded. Now: re-arm instead of giving up. */
             if (this.movi && this.movi.paused) { this._wakeTopBar(); return; }
             top.classList.add('gp-idle');
-        }, 2000);
+        }, 3000);
     },
 
     /* Seek interval (2026-10-25): Settings → Playback → Seek Interval,
@@ -591,9 +593,20 @@ const Player = {
     },
 
     async _onTracksReady(pre) {
-        if (this._tracksReadyDone) return;
         const tr = pre || await this._collectTracks();
         if (!tr.audio.length && !tr.subs.length && !this.movi) return;
+        if (this._tracksReadyDone) {
+            /* Latch fix (audit bundle): the first call could fire
+               before movi parsed its tracks, or with audio only.
+               If NEW tracks appeared since, re-run auto-select —
+               _autoSelectTracks respects a manual subtitle pick. */
+            const prev = this._moviTracks || { audio: [], subs: [] };
+            if (tr.subs.length > (prev.subs || []).length || tr.audio.length > (prev.audio || []).length) {
+                this._moviTracks = tr;
+                this._autoSelectTracks(tr);
+            }
+            return;
+        }
         this._tracksReadyDone = true;
         this._moviTracks = tr;
         this._autoSelectTracks(tr);

@@ -25,6 +25,25 @@ const App = {
         this.bindHoverDismiss();
         this.bindHashRouting();
         this.handleOAuthCallback();
+        /* Background token refresh (audit bundle, Phase 2-ready):
+           never blocks boot. Only a permanently revoked token
+           (expired + refresh rejected) sends the user to the gate;
+           network errors keep the old token and never log out. */
+        try {
+            if (typeof FirebaseAuth !== 'undefined' && FirebaseAuth.getValidIdToken) {
+                FirebaseAuth.getValidIdToken().then(tok => {
+                    if (tok) return;
+                    try {
+                        const a = Storage.getAuthState();
+                        if (a && a.signedIn && !a.isGuest && FirebaseAuth._lastRefreshPermanent) {
+                            Storage.clearAuthState();
+                            this.showGate();
+                            alert('Your session was revoked or expired. Please sign in again.');
+                        }
+                    } catch (e) {}
+                }).catch(() => {});
+            }
+        } catch (e) {}
         this.applyTheme();
         this.renderProfiles();
         /* Splash (2026-10-24, reversed same day at his order):
@@ -140,6 +159,7 @@ const App = {
     },
 
     showGate() {
+        this._clearAuthPassword();
         Storage.clearActiveProfileId();
         localStorage.removeItem('ganime_last_route');
         document.getElementById('addProfileScreen').classList.add('hidden');
@@ -171,6 +191,11 @@ const App = {
        login — they tell the user to use Guest mode until a Firebase
        project is connected. Sign In and Create Account are separate:
        never offer creation on a wrong-password error. */
+    _clearAuthPassword() {
+        const pw = document.getElementById('authPassword');
+        if (pw) pw.value = '';
+    },
+
     _authFormValues() {
         const em = document.getElementById('authEmail');
         const pw = document.getElementById('authPassword');
@@ -195,6 +220,7 @@ const App = {
         this._authBusy(btn, true);
         try {
             const session = await FirebaseAuth.signIn(email, password);
+            this._clearAuthPassword();
             Storage.saveAuthState(session);
             this.showProfilePicker();
         } catch (err) {
@@ -213,6 +239,7 @@ const App = {
         this._authBusy(btn, true);
         try {
             const session = await FirebaseAuth.signUp(email, password);
+            this._clearAuthPassword();
             Storage.saveAuthState(session);
             this.showProfilePicker();
         } catch (err) {
@@ -547,6 +574,17 @@ const App = {
         this.renderHome();
         this.renderTopBar();
         this.shellLaunched = true;
+        /* OAuth landing (audit bundle): if the AniList callback
+           finished during the splash, boot restored Home and the
+           connection was saved with no landing. A pending flag
+           set by handleOAuthCallback() sends the user to
+           Profile → Tracking instead. */
+        if (this._pendingOAuthLanding) {
+            this._pendingOAuthLanding = false;
+            this.settingsPage = 'tracking';
+            this.navigate('screen-profile');
+            return;
+        }
         /* toHome (manual profile tap) = fresh start at Home.
            Refresh-restore (Fix 11, boot path only): reopen where
            the user was, not Home, whenever a saved route exists. */
@@ -834,8 +872,8 @@ const App = {
                 <div class="cal2-thumb" ${e.id ? `onmouseenter="App.hoverIn(this,'${e.id}')" onmouseleave="App.hoverOut()"` : ''}
                     style="background:linear-gradient(150deg, hsl(${e.hue} 65% 42%), hsl(${e.hue + 40} 70% 26%))">${this._safeImgUrl(e.poster) ? `<img class="cal-poster-img" src="${this._safeImgUrl(e.poster)}" alt="" loading="lazy">` : `<span>${e.name.charAt(0)}</span>`}</div>
                 <div class="cal2-info">
-                    <div class="cal2-title">${e.name}</div>
-                    <div class="cal2-sub">${e.sub}</div>
+                    <div class="cal2-title">${this.esc(e.name)}</div>
+                    <div class="cal2-sub">${this.esc(e.sub)}</div>
                 </div>
                 <span class="cal2-chevron">›</span>
             </div>`).join('')
@@ -1300,6 +1338,9 @@ const App = {
                     this.homeLiveFailed = false;
                     this.renderHero();
                     this.renderRails();
+                    let savedTs = 0;
+                    try { savedTs = Number(sessionStorage.getItem('ganime_home_ts') || 0); } catch (e) {}
+                    if (savedTs) this.lastHomeFetch = savedTs;
                     if (Date.now() - (this.lastHomeFetch || 0) < 120000) return;
                 }
             } catch (e) { /* corrupt cache — fetch fresh below */ }
@@ -1316,7 +1357,7 @@ const App = {
                 return;
             }
             rails.forEach(r => this.cacheTitles(r.items));
-            try { sessionStorage.setItem('ganime_home_rails', JSON.stringify(rails)); } catch (e) {}
+            try { sessionStorage.setItem('ganime_home_rails', JSON.stringify(rails)); sessionStorage.setItem('ganime_home_ts', String(Date.now())); } catch (e) {}
             this.homeLiveFailed = false;
             this.dataSource = 'ANILIST';
             const trending = rails.find(r => r.title === 'Trending Now') || rails[0];
@@ -1358,7 +1399,7 @@ const App = {
            genre selected), justified synopsis. */
         const statusLabel = t.status ? String(t.status).replace(/_/g, ' ') : '';
         box.innerHTML = `
-            <div class="hero" style="${coverStyle}">
+            <div class="hero" style="${coverStyle}" onmouseenter="App._heroPaused=true" onmouseleave="App._heroPaused=false">
                 <div class="hero-shade"></div>
                 <div class="hero-content">
                     <div class="hero-chips">
@@ -1369,7 +1410,7 @@ const App = {
                     </div>
                     <div class="hero-title">${this.esc(t.title)}</div>
                     ${(t.titleRomaji && t.titleRomaji !== t.title) ? `<div class="hero-title-sub">${this._escEp(t.titleRomaji)}</div>` : ''}
-                    ${(t.genres && t.genres.length) ? `<div class="hero-genres">${t.genres.map(g => `<button class="gpill" onclick="App.searchGenre('${g.replace(/'/g, "\\'")}')">${g}</button>`).join('')}</div>` : ''}
+                    ${(t.genres && t.genres.length) ? `<div class="hero-genres">${t.genres.map(g => `<button class="gpill" data-genre="${this.esc(g)}" onclick="App.searchGenre(this.dataset.genre)">${this.esc(g)}</button>`).join('')}</div>` : ''}
                     <div class="hero-synopsis justified">${this.esc(t.synopsis)}</div>
                     <div class="hero-actions">
                         <button class="btn-play" onclick="App.playTitle('${t.id}')">▶ Play</button>
@@ -1382,6 +1423,7 @@ const App = {
         if (this.heroTimer) clearInterval(this.heroTimer);
         this.heroTimer = setInterval(() => {
             if (this.currentScreen !== 'screen-home') return;
+            if (this._heroPaused) return;
             this.heroGo((this.heroIndex + 1) % this.heroList.length);
         }, 6000);
     },
@@ -1551,7 +1593,7 @@ const App = {
             const note = name === 'tags' && !this.tagList.length ? '<p class="text-secondary">Tag list loading from AniList…</p>' : '';
             const searchBox = name === 'tags' ? `<input type="text" class="app-input tag-filter-input" placeholder="Filter tags…" oninput="App.filterTagChips(this.value)">` : '';
             return `<div class="fpanel">${searchBox}${note}<div class="chip-grid" id="${name}ChipGrid">${list.map(g =>
-                `<button class="fchip ${chosen.includes(g) ? 'on' : ''}" data-tag="${g}" onclick="App.toggleListFilter('${name}','${g.replace(/'/g, "\\'")}')">${g}</button>`).join('')}</div></div>`;
+                `<button class="fchip ${chosen.includes(g) ? 'on' : ''}" data-tag="${this.esc(g)}" onclick="App.toggleListFilter('${name}', this.dataset.tag)">${this.esc(g)}</button>`).join('')}</div></div>`;
         }
         if (name === 'year') {
             const years = ['Any'];
@@ -1605,10 +1647,11 @@ const App = {
         const s = this.searchState;
         if (!s) return '';
         const chips = [];
-        const one = (label, clearFn) => chips.push(`<button class="active-chip" onclick="${clearFn}">${label} ✕</button>`);
+        const one = (label, clearFn) => chips.push(`<button class="active-chip" onclick="${clearFn}">${this.esc(label)} ✕</button>`);
+        const oneTag = (label, kind, val) => chips.push(`<button class="active-chip" data-kind="${kind}" data-value="${this.esc(val)}" onclick="App.clearFilterChip(this)">${this.esc(label)} ✕</button>`);
         if (s.q) one('Search: ' + s.q, "App.clearSearch()");
-        s.genres.forEach(g => one(g, `App.toggleListFilter('genres','${g.replace(/'/g, "\\'")}')`));
-        s.tags.forEach(t => one(t, `App.toggleListFilter('tags','${t.replace(/'/g, "\\'")}')`));
+        s.genres.forEach(g => oneTag(g, 'genres', g));
+        s.tags.forEach(t => oneTag(t, 'tags', t));
         if (s.year) one('Year: ' + s.year, "App.setSingleFilter('year','')");
         if (s.season) one('Season: ' + s.season, "App.setSingleFilter('season','')");
         if (s.format) one('Format: ' + s.format, "App.setSingleFilter('format','')");
@@ -1647,6 +1690,11 @@ const App = {
         const bar = document.getElementById('searchBar');
         if (bar) bar.innerHTML = this.renderSearchBarHTML(this.searchState.q || '');
         this.applyFilters();
+    },
+
+    clearFilterChip(el) {
+        if (!el) return;
+        this.toggleListFilter(el.dataset.kind, el.dataset.value);
     },
 
     toggleListFilter(kind, value) {
@@ -1739,8 +1787,8 @@ const App = {
                 onmouseenter="App.hoverIn(this,'${t.id}')" onmouseleave="App.hoverOut()">
                 <div class="result-thumb" style="background:linear-gradient(150deg, hsl(${t.hue} 65% 42%), hsl(${t.hue + 40} 70% 26%))">${this._safeImgUrl(t.poster) ? `<img class="cal-poster-img" src="${this._safeImgUrl(t.poster)}" alt="" loading="lazy">` : `<span>${t.title.charAt(0)}</span>`}</div>
                 <div class="cal2-info">
-                    <div class="cal2-title">${t.title}</div>
-                    <div class="cal2-sub">★ ${t.score} · ${t.year} · ${t.type}${t.eps ? ' · ' + t.eps + ' eps' : ''}${(t.genres && t.genres.length) ? ' · ' + t.genres.slice(0, 3).join(', ') : ''}</div>
+                    <div class="cal2-title">${this.esc(t.title)}</div>
+                    <div class="cal2-sub">★ ${t.score} · ${t.year} · ${t.type}${t.eps ? ' · ' + t.eps + ' eps' : ''}${(t.genres && t.genres.length) ? ' · ' + t.genres.slice(0, 3).map(g => this.esc(g)).join(', ') : ''}</div>
                 </div>
                 <span class="cal2-chevron">›</span>
             </div>`;
@@ -1821,6 +1869,7 @@ const App = {
     async runBrowse() {
         const results = document.getElementById('searchResults');
         if (!results || !this.searchState) return;
+        const reqId = (this._browseReqId = (this._browseReqId || 0) + 1);
         const s = this.searchState;
         results.innerHTML = '<p class="text-secondary" style="margin-top:16px">Searching AniList…</p>';
         const effectiveTags = s.tags.slice();
@@ -1832,6 +1881,7 @@ const App = {
         });
         try {
             let found = await AniList.browse(filters, 36);
+            if (reqId !== this._browseReqId) return;
             this.cacheTitles(found);
             this.lastFuzzy = [];
             if (s.q && found.length < 5) {
@@ -1843,11 +1893,13 @@ const App = {
                 if (longest && longest.length >= 3 && !(sameAsQuery && s.sort === 'SEARCH_MATCH')) {
                     try {
                         const retry = await AniList.browse(Object.assign({}, filters, { q: longest, sort: 'SEARCH_MATCH' }), 12);
+                        if (reqId !== this._browseReqId) return;
                         this.cacheTitles(retry);
                         const seen = new Set(found.map(t => t.id));
                         retry.forEach(t => { if (!seen.has(t.id)) { this.lastFuzzy.push(t); seen.add(t.id); } });
                     } catch (e) { /* fuzzy is best-effort */ }
                 }
+                if (reqId !== this._browseReqId) return;
                 const local = this.fuzzyLocal(s.q, found.map(t => t.id).concat(this.lastFuzzy.map(t => t.id)), 8);
                 this.lastFuzzy = this.lastFuzzy.concat(local);
             }
@@ -2244,7 +2296,7 @@ const App = {
                     </div>
                     <div class="hero-title">${this.esc(t.title)}</div>
                     ${(t.titleRomaji && t.titleRomaji !== t.title) ? `<div class="hero-title-sub">${this._escEp(t.titleRomaji)}</div>` : ''}
-                    ${(t.genres && t.genres.length) ? `<div class="hero-genres">${t.genres.map(g => `<button class="gpill" onclick="App.searchGenre('${g.replace(/'/g, "\\'")}')">${g}</button>`).join('')}</div>` : ''}
+                    ${(t.genres && t.genres.length) ? `<div class="hero-genres">${t.genres.map(g => `<button class="gpill" data-genre="${this.esc(g)}" onclick="App.searchGenre(this.dataset.genre)">${this.esc(g)}</button>`).join('')}</div>` : ''}
                     <div class="hero-synopsis justified">${this.esc(t.synopsis)}</div>
                     <div class="hero-actions">
                         <button class="btn-play" onclick="App.playTitle('${t.id}', ${nextEp})">${t.type === 'Movie' ? '▶ Play Movie' : '▶ Play Ep ' + nextEp}</button>
@@ -2298,10 +2350,10 @@ const App = {
         const total = t.type === 'Movie' ? 1 : (t.eps || (this.detailsUi.epData ? this.detailsUi.epData.length : 0));
         if (!total) return;
         const watched = ((Storage.getWatched()[t.id] || {}).eps || []);
-        let changed = false;
-        for (let n = 1; n <= total; n++) {
-            if (!watched.includes(n)) { Storage.toggleWatched(t.id, n, this.titleMeta(t)); changed = true; }
-        }
+        const all = [];
+        for (let n = 1; n <= total; n++) all.push(n);
+        const changed = watched.length !== all.length || all.some(n => !watched.includes(n));
+        if (changed) Storage.setWatchedEps(t.id, all, this.titleMeta(t));
         if (changed) this.pushAnilistProgress(t);
         this.renderDetails();
     },
@@ -2493,7 +2545,7 @@ const App = {
                         <select class="setting-select" onchange="App._teSet('anilist','status', this.value)">${statusOpts(d.anilist.status)}</select>
                     </div>
                     <div>
-                        <div class="te-label">Score (AniList scale 0–10.0) · <b id="te-al-score">${d.anilist.score || '—'}</b></div>
+                        <div class="te-label">Score (AniList scale 0–10.0) · <b id="te-al-score">${(d.anilist.score ?? '—')}</b></div>
                         <input type="range" class="setting-range te-range" min="0" max="10" step="0.1" value="${d.anilist.score}"
                             oninput="App._teSet('anilist','score', parseFloat(this.value)); document.getElementById('te-al-score').textContent = this.value">
                     </div>
@@ -2576,7 +2628,7 @@ const App = {
                 try {
                     const token = await this.anilistAccessToken();
                     await AniList.saveProgress(token, t.anilistId, d.anilist.progress, apiStatus[d.anilist.status] || 'CURRENT', {
-                        score: d.anilist.score || null,
+                        score: (typeof d.anilist.score === 'number' ? d.anilist.score : null),
                         notes: d.anilist.notes || null,
                         startedAt: fuzzy(d.anilist.start),
                         completedAt: fuzzy(d.anilist.finish)
@@ -3502,7 +3554,11 @@ const App = {
             });
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
             this.settingsPage = 'tracking';
+            this._pendingOAuthLanding = true;
             this.fetchTrackingLists(true);
+            /* Late landing: if the shell already launched (slow
+               viewer fetch), go to Profile → Tracking now. */
+            if (this.shellLaunched && this.currentScreen !== 'screen-profile') this.navigate('screen-profile');
             /* Boot race (2026-10-25 final, honest scope): the token is
                already stripped from the hash by replaceState above, so
                it cannot be wiped by syncHash. The only real race is
@@ -4013,7 +4069,7 @@ const App = {
             : [((this.trackingLists[this.libraryFilter] || {}).entries || [])];
         const entries = this.sortLibraryEntries([].concat.apply([], groups));
         if (!entries.length) {
-            grid.innerHTML = '<p class="text-secondary">This list is empty on AniList.</p>';
+            grid.innerHTML = '<p class="text-secondary">This list is empty on ' + this.esc(active) + '.</p>';
             return;
         }
         grid.innerHTML = `<div class="search-grid">${entries.map(e => this.libraryCardHTML(e)).join('')}</div>`;
@@ -4108,7 +4164,7 @@ const App = {
             <div class="settings-group">
                 ${this.sSelect('preferredAudioLanguage', 'Preferred Audio Language', langs)}
                 ${this.sSelect('secondaryAudioLanguage', 'Secondary Audio Language', subLangs)}
-                ${this.sSelect('preferredSubtitleLanguage', 'Preferred Language', subLangs)}
+                ${this.sSelect('preferredSubtitleLanguage', 'Preferred Subtitle Language', subLangs)}
                 ${this.sToggle('preferredLanguagesOnly', 'Show Only Preferred Languages', 'Only show subtitles matching your preferred subtitle languages.')}
             </div>
             <div class="section-label">SUBTITLE RENDERING</div>
@@ -4199,10 +4255,10 @@ const App = {
                 </div>
                 <div class="addon-logo">${(a.logo && /^https?:\/\//i.test(a.logo)) ? `<img src="${this.esc(a.logo)}" alt="">` : `<span>${a.name.charAt(0)}</span>`}</div>
                 <div class="addon-info">
-                    <div class="addon-name">${this.esc(a.name)} ${a.version ? `<span class="version-chip">v${a.version}</span>` : ''}</div>
+                    <div class="addon-name">${this.esc(a.name)} ${a.version ? `<span class="version-chip">v${this.esc(a.version)}</span>` : ''}</div>
                     ${a.description ? `<div class="setting-desc addon-desc">${this.esc(a.description)}</div>` : ''}
                     <div class="addon-url">${this.esc(this.maskAddonUrl(a.manifestUrl))}</div>
-                    <div class="addon-res">${a.resources.join(' · ') || 'no resources'}</div>
+                    <div class="addon-res">${this.esc((a.resources || []).join(' · ')) || 'no resources'}</div>
                 </div>
                 <div class="addon-actions">
                     <label class="switch" title="${a.enabled ? 'Enabled' : 'Disabled'}">
@@ -4337,6 +4393,7 @@ const App = {
             const isTop = settings.navBarPosition === 'top';
             nav.classList.toggle('pos-top', isTop);
             nav.classList.toggle('glass-off', settings.liquidGlassTab === false);
+            document.body.classList.toggle('glass-off', settings.liquidGlassTab === false);
             nav.classList.toggle('pos-bottom', !isTop);
             viewport.classList.toggle('nav-top-pad', isTop);
         }
@@ -4366,6 +4423,7 @@ const App = {
     },
 
     closeModal() {
+        try { if (typeof this.simklStopAutoPoll === 'function') this.simklStopAutoPoll(); } catch (e) {}
         document.getElementById('modalRoot').innerHTML = '';
     }
 };

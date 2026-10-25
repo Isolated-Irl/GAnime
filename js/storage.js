@@ -232,8 +232,9 @@ const Storage = {
     },
 
     /* --- Tracking connections (per profile: ganime_tracking_<pid>) ---
-       { anilist: { clientId, clientSecret, accessToken, refreshToken,
-       expiresAt, user: {id, name, avatar} } } — the secret and tokens
+       { anilist: { clientId, accessToken,
+       expiresAt, user: {id, name, avatar} } } — NO client secret is
+       ever stored here (AniList implicit grant uses none); tokens
        never leave this device except to anilist.co itself. */
     getTracking(profileId) {
         return this._read('ganime_tracking_' + (profileId || this.getActiveProfileId()), {});
