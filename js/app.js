@@ -2484,7 +2484,7 @@ const App = {
                     <span class="te-name">AniList</span>
                     <span class="te-conn">${alOk ? '@' + this.esc(alConn.user ? alConn.user.name : '') : 'Not Connected'}</span>
                     ${t.anilistId ? `<button class="btn-mini" onclick="window.open('https://anilist.co/anime/${t.anilistId}', '_blank')">Open ↗</button>` : ''}
-                    ${alOk ? '' : '<button class="btn-mini" onclick="App.closeModal(); App.openAnilistConnect()">Connect</button>'}
+                    ${alOk ? '' : '<button class="btn-mini" onclick="App.closeModal(); App.connectAnilistOneClick()">Connect</button>'}
                 </div>
                 ${alOk ? `
                 <div class="te-grid">
@@ -3418,7 +3418,7 @@ const App = {
         return `
             ${this.backHeader('Tracking')}
             <div class="tracker-stat-row">
-                ${statCard('AniList', !!(al && al.accessToken), al && al.user ? '@' + al.user.name : '', (al && al.accessToken) ? "App.openTrackerManage('anilist')" : 'App.openAnilistConnect()')}
+                ${statCard('AniList', !!(al && al.accessToken), al && al.user ? '@' + al.user.name : '', (al && al.accessToken) ? "App.openTrackerManage('anilist')" : 'App.connectAnilistOneClick()')}
                 ${statCard('MyAnimeList', !!(mal && (mal.accessToken || mal.listsCache)), mal && mal.user ? '@' + mal.user.name : '', (mal && (mal.accessToken || mal.listsCache)) ? "App.openTrackerManage('mal')" : 'App.openMalConnect()')}
                 ${statCard('Simkl', !!(sk && sk.accessToken), sk && sk.user ? '@' + sk.user.name : '', (sk && sk.accessToken) ? "App.openTrackerManage('simkl')" : 'App.openSimklConnect()')}
             </div>
@@ -3439,7 +3439,7 @@ const App = {
        Disconnect lives now that the old provider cards are gone. */
     openTrackerManage(provider) {
         const conns = {
-            anilist: { name: 'AniList', conn: Storage.getAnilistConn() || {}, disc: 'App.anilistDisconnect()', recon: 'App.openAnilistConnect()' },
+            anilist: { name: 'AniList', conn: Storage.getAnilistConn() || {}, disc: 'App.anilistDisconnect()', recon: 'App.connectAnilistOneClick()' },
             mal: { name: 'MyAnimeList', conn: Storage.getMalConn() || {}, disc: 'App.malDisconnect()', recon: 'App.openMalConnect()' },
             simkl: { name: 'Simkl', conn: Storage.getSimklConn() || {}, disc: 'App.simklDisconnect()', recon: 'App.openSimklConnect()' }
         };
@@ -3981,7 +3981,7 @@ const App = {
             : active === 'Simkl' ? Storage.getSimklConn()
             : active === 'MyAnimeList' ? Storage.getMalConn() : null;
         if (active !== source || !conn) {
-            const opener = source === 'AniList' ? 'App.openAnilistConnect()' : source === 'Simkl' ? 'App.openSimklConnect()' : 'App.openMalConnect()';
+            const opener = source === 'AniList' ? 'App.connectAnilistOneClick()' : source === 'Simkl' ? 'App.openSimklConnect()' : 'App.openMalConnect()';
             controls.innerHTML = headerHTML;
             grid.innerHTML = `
                 <div class="provider-card">
@@ -4150,7 +4150,7 @@ const App = {
     },
 
     connectProvider(name) {
-        if (name === 'AniList') { this.openAnilistConnect(); return; }
+        if (name === 'AniList') { this.connectAnilistOneClick(); return; }
         if (name === 'Simkl') { this.openSimklConnect(); return; }
         if (name === 'MyAnimeList') { this.openMalConnect(); return; }
     },
