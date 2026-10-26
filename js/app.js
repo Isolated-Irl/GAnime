@@ -184,6 +184,12 @@ const App = {
         localStorage.removeItem('ganime_last_route');
         document.getElementById('addProfileScreen').classList.add('hidden');
         document.getElementById('profilePickerScreen').classList.add('hidden');
+        /* Bug 3 (2026-10-26 audit): when the gate fires mid-app
+           (e.g. token revoked), the app shell behind it must hide
+           too, or the gate renders over the main UI. launchShell
+           re-shows both on the next sign-in. */
+        document.getElementById('appViewport').classList.add('hidden');
+        document.getElementById('floatingNav').classList.add('hidden');
         document.getElementById('authGateScreen').classList.remove('hidden');
     },
 
