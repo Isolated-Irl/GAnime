@@ -2962,7 +2962,15 @@ const App = {
     },
 
     openStreams(titleId, episode) {
-        this.streamsState = { titleId, episode: episode || null, groups: [], flat: [], loading: true, tab: 'all', supportedOnly: false, addons: [] };
+        /* Addon chips from the first frame (2026-10-26, iOS
+           report): the chips row used to wait for loadStreams'
+           heal + ID-bridge phases, so during the opening seconds
+           of a search no installed addon showed at all — just the
+           "Fetching…" text. Seeding the list synchronously here
+           means every installed addon shows with its spinning
+           circle for the WHOLE search, from tap to results. */
+        const seedAddons = Storage.getAddons().filter(a => a.enabled && (!a.resources.length || a.resources.includes('stream')));
+        this.streamsState = { titleId, episode: episode || null, groups: [], flat: [], loading: true, tab: 'all', supportedOnly: false, addons: seedAddons };
         this.navigate('screen-streams');
         this.renderStreams();
         this.loadStreams();
@@ -3002,6 +3010,11 @@ const App = {
             } catch (e) { /* healing is best-effort */ }
         }
         st.addons = addons;
+        /* Re-render now that the healed list is known, so the
+           chips stay correct through the ID-bridge race that
+           follows (before this, the first render after a heal
+           only happened when an addon answered). */
+        if (this.streamsState === st) this.renderStreams();
         if (!addons.length) { st.loading = false; this.renderStreams(); return; }
         /* The ID bridge must never freeze this screen: a slow or
            failing bridge falls back to the ids we already have. */
@@ -3055,7 +3068,8 @@ const App = {
     refreshStreams() {
         if (!this.streamsState) return;
         const { titleId, episode, tab, supportedOnly } = this.streamsState;
-        this.streamsState = { titleId, episode, groups: [], flat: [], loading: true, tab, supportedOnly: !!supportedOnly, addons: [] };
+        const seedAddons = Storage.getAddons().filter(a => a.enabled && (!a.resources.length || a.resources.includes('stream')));
+        this.streamsState = { titleId, episode, groups: [], flat: [], loading: true, tab, supportedOnly: !!supportedOnly, addons: seedAddons };
         this.renderStreams();
         this.loadStreams();
     },

@@ -144,14 +144,25 @@ const Player = {
             /* Mid-stream buffering: hide centre too, so movi's spinner never
                stacks under our pause icon. Removed on playing-with-frame. */
             #playerOverlay.gp-buffering #gpSeekCenter { opacity: 0 !important; pointer-events: none !important; visibility: hidden !important; }
-            /* No circle: bare icons/text only, like the top cluster, bigger. */
+            /* No circle: bare icons/text only, like the top cluster, bigger.
+               Centre icons are inline SVG (2026-10-26, iOS fix): the old
+               text glyphs (↩ ⏸ ↪) render as blue emoji on iOS, which
+               clashed with movi's monochrome theme. SVG cannot be
+               emoji-fied, so the cluster now matches movi on every
+               platform. text-shadow stays for the "5s" labels only;
+               SVGs get the same drop-shadow as the top icons. */
             #gpSeekCenter button { pointer-events: auto; background: transparent; color: #fff;
                 border: none; cursor: pointer; font-weight: 800;
-                display: flex; align-items: center; justify-content: center;
+                display: flex; align-items: center; justify-content: center; gap: 6px;
                 width: auto; height: auto; padding: 8px 10px; font-size: 18px;
                 text-shadow: 0 2px 8px rgba(0,0,0,0.9); }
+            #gpSeekCenter button svg { filter: drop-shadow(0 2px 8px rgba(0,0,0,0.9)); display: block; flex: none; }
             #gpSeekCenter button:hover { background: transparent; transform: scale(1.12); }
             #gpSeekCenter button.gp-seek-play { font-size: 32px; padding: 8px 14px; }
+            /* Last-resort fullscreen (no native element fullscreen and
+               no video fullscreen API — e.g. an exotic iOS browser):
+               at least stack the already-fixed overlay above all else. */
+            #playerOverlay.gp-pseudo-fs { z-index: 9999 !important; }
             /* Episode/Source triggers: MOVED 2026-10-25 at Isolated's order.
                They used to be dark-glass pills above movi's bottom bar.
                Now they are bare icons in the top cluster, same style as
@@ -268,10 +279,84 @@ const Player = {
         return Math.max(1, Math.min(60, v));
     },
 
+    /* Centre-cluster icons (2026-10-26, iOS fix): inline SVG, never
+       text glyphs — iOS renders ↩ ↪ ⏸ as blue emoji, breaking the
+       movi monochrome theme. Bare strokes, currentColor, same
+       drop-shadow treatment as the top icons. */
+    _svgSeekBack() {
+        return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>';
+    },
+    _svgSeekFwd() {
+        return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"></path></svg>';
+    },
+    _svgPlay() {
+        return '<svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor" stroke="none"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+    },
+    _svgPause() {
+        return '<svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>';
+    },
+    _svgExpand() {
+        return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>';
+    },
+    _svgCompress() {
+        return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M21 8h-3a2 2 0 0 1-2-2V3"></path><path d="M3 16h3a2 2 0 0 1 2 2v3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path></svg>';
+    },
+
     _updateSeekPlayBtn() {
         const btn = document.getElementById('gpSeekPlay');
         if (!btn) return;
-        btn.textContent = (this.movi && this.movi.paused) ? '▶' : '⏸';
+        btn.innerHTML = (this.movi && this.movi.paused) ? this._svgPlay() : this._svgPause();
+    },
+
+    /* ---------- iOS fullscreen (2026-10-26) ----------
+       iOS browsers (all WKWebView) do NOT support element
+       fullscreen: overlay.requestFullscreen is undefined and
+       webkitRequestFullscreen on a div does nothing — so our
+       auto-fullscreen and movi's own fullscreen button both fail
+       silently there. The one path Apple allows is the VIDEO
+       element's webkitEnterFullscreen (true native fullscreen,
+       with Apple's own controls while active). movi's shadowRoot
+       is reachable (same pattern as setAspect), so the video
+       element can be found. This must run inside a tap (Apple
+       requires a user gesture), which is why it lives on our own
+       top-row button — auto-fullscreen on open cannot be
+       gesture-synced with a video element created later. */
+    _nativeFsAvailable(overlay) {
+        try {
+            return !!(overlay && (overlay.requestFullscreen || overlay.webkitRequestFullscreen));
+        } catch (e) { return false; }
+    },
+    _moviVideo() {
+        try {
+            const mp = this.movi;
+            if (!mp) return null;
+            if (mp.shadowRoot) {
+                const v = mp.shadowRoot.querySelector('video');
+                if (v) return v;
+            }
+            return mp.querySelector('video')
+                || document.querySelector('#moviContainer video')
+                || null;
+        } catch (e) { return null; }
+    },
+    _toggleVideoFullscreen() {
+        const overlay = document.getElementById('playerOverlay');
+        const video = this._moviVideo();
+        if (video && video.webkitEnterFullscreen) {
+            try {
+                if (video.webkitDisplayingFullscreen && video.webkitExitFullscreen) video.webkitExitFullscreen();
+                else video.webkitEnterFullscreen();
+            } catch (e) {}
+            return true;
+        }
+        /* Last resort: no video fullscreen API either — at least
+           stack the overlay above everything else. */
+        if (overlay) {
+            overlay.classList.toggle('gp-pseudo-fs');
+            const btn = document.getElementById('gpFsBtn');
+            if (btn) btn.innerHTML = overlay.classList.contains('gp-pseudo-fs') ? this._svgCompress() : this._svgExpand();
+        }
+        return true;
     },
 
     /* AniSkip: community OP/ED timestamps, keyed by MAL ID.
@@ -338,23 +423,33 @@ const Player = {
         if (addonName) subParts.push(addonName);
         if (t && t.type !== 'Movie' && ep) subParts.push('S1 · E' + ep);
 
+        /* Fullscreen button: ONLY when element fullscreen is
+           unavailable (iOS WKWebView) — elsewhere movi's own
+           fullscreen button works, so the row stays at 4 icons.
+           Placed leftmost so the existing Episodes → Sources →
+           External → Back order (and External-left-of-Back) is
+           untouched. It fades with the row via gp-idle, like the
+           other top buttons. */
+        const showFsBtn = !this._nativeFsAvailable(overlay);
         overlay.innerHTML = `
             <div id="moviContainer"></div>
             <div class="gp-movi-top">
+                ${showFsBtn ? `<button id="gpFsBtn" title="Fullscreen">${this._svgExpand()}</button>` : ''}
                 <button id="gpMoviEpBtn" title="Episodes (E)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><circle cx="4" cy="6" r="1.5" fill="currentColor"></circle><circle cx="4" cy="12" r="1.5" fill="currentColor"></circle><circle cx="4" cy="18" r="1.5" fill="currentColor"></circle></svg></button>
                 <button id="gpMoviSrcBtn" title="Sources (S)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
                 <button id="gpExt" title="Open in MPV / VLC (.m3u)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></button>
                 <button id="gpBack" title="Back"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
             </div>
             <div id="gpSeekCenter">
-                <button id="gpSeekBack" title="Back">↩ ${_iv}s</button>
-                <button id="gpSeekPlay" class="gp-seek-play" title="Play / Pause">⏸</button>
-                <button id="gpSeekFwd" title="Forward">${_iv}s ↪</button>
+                <button id="gpSeekBack" title="Back">${this._svgSeekBack()}<span>${_iv}s</span></button>
+                <button id="gpSeekPlay" class="gp-seek-play" title="Play / Pause">${this._svgPause()}</button>
+                <button id="gpSeekFwd" title="Forward"><span>${_iv}s</span>${this._svgSeekFwd()}</button>
             </div>
             <button id="aniskipBtn"></button>
             <div id="playerMsg" class="player-msg hidden"></div>
             <div class="gp-movi-pop" id="gpMoviEp"></div>
             <div class="gp-src-back" id="gpSrcBack"></div>`;
+        if (document.getElementById('gpFsBtn')) document.getElementById('gpFsBtn').addEventListener('click', () => { this._toggleVideoFullscreen(); this._wakeTopBar(); });
         if (document.getElementById('gpBack')) document.getElementById('gpBack').addEventListener('click', () => this.close());
         if (document.getElementById('gpExt')) document.getElementById('gpExt').addEventListener('click', () => this.openInM3U());
         if (document.getElementById('gpMoviEpBtn')) document.getElementById('gpMoviEpBtn').addEventListener('click', () => this.toggleEpisodes());
@@ -903,6 +998,9 @@ const Player = {
     toggleFullscreen() {
         const overlay = document.getElementById('playerOverlay');
         if (!overlay) return;
+        /* No element fullscreen (iOS) → the video-native path,
+           so the F key works there too. */
+        if (!this._nativeFsAvailable(overlay)) { this._toggleVideoFullscreen(); return; }
         try {
             if (!document.fullscreenElement) {
                 if (overlay.requestFullscreen) { const p = overlay.requestFullscreen(); if (p && p.catch) p.catch(() => {}); }
@@ -1372,6 +1470,7 @@ const Player = {
         const overlay = document.getElementById('playerOverlay');
         if (overlay) {
             overlay.classList.add('hidden');
+            overlay.classList.remove('gp-pseudo-fs');
             overlay.innerHTML = '';
         }
         this.currentUrl = '';
