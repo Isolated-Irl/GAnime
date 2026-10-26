@@ -318,7 +318,7 @@ const Sync = {
         if (!key || typeof key !== 'string') return;
         const now = Date.now();
         try {
-            if (key === 'ganime_profiles_list') {
+            if (key === 'ganime_profiles_list' || key.startsWith('ganime_profiles_')) {
                 const m = this._meta(); m.profiles = now; this._saveMeta(m);
             } else {
                 const mm = key.match(/^ganime_(settings|addons|watched|locallib|mylist)_(.+)$/);

@@ -38,7 +38,7 @@ const Storage = {
            firestore.js) and for applies (Sync skips while applying). */
         try {
             if (typeof Sync !== 'undefined' && Sync.markDirty
-                && (key === 'ganime_profiles_list'
+                && (key.startsWith('ganime_profiles_')
                     || /^ganime_(settings|addons|watched|locallib|mylist)_/.test(key))) {
                 Sync.markDirty(key);
             }
@@ -56,7 +56,29 @@ const Storage = {
         localStorage.removeItem(this.KEYS.AUTH);
     },
 
-    /* --- Profiles --- */
+    /* --- Profiles: namespaced per session owner (2026-10-26 fix) ---
+       Signed-in users and guests used to share ONE profile list, so
+       after sign-out, "Continue without an account" opened the
+       account's profiles with no password. Now the list (and the
+       active id) live under the session owner: a Firebase uid when
+       signed in, "guest" otherwise. Every caller goes through these
+       methods, so sync, picker, addons and sharing all follow.
+       Legacy: the old shared key is adopted ONCE, and only by a
+       signed-in session (copied, never moved, so it stays as a
+       backup). Guest sessions never adopt it and start empty. */
+    _ownerSuffix() {
+        try {
+            const a = this.getAuthState();
+            if (a && a.signedIn && !a.isGuest && a.uid) return String(a.uid);
+        } catch (e) {}
+        return 'guest';
+    },
+    _profilesKey() {
+        return 'ganime_profiles_' + this._ownerSuffix();
+    },
+    _activeKey() {
+        return 'ganime_active_' + this._ownerSuffix();
+    },
     getProfiles() {
         // Version marker only — profiles are NEVER (re)seeded.
         // No stored list = no profiles yet (create-first flow).
@@ -64,26 +86,59 @@ const Storage = {
         if (version !== String(Config.DATA_VERSION)) {
             localStorage.setItem('ganime_data_version', String(Config.DATA_VERSION));
         }
-        return this._read(this.KEYS.PROFILES, []) || [];
+        const key = this._profilesKey();
+        let list = this._read(key, null);
+        if (list === null) {
+            /* First run under namespacing: a signed-in session
+               adopts the legacy shared list once (copy). Guest
+               never adopts — its list starts empty. */
+            try {
+                const a = this.getAuthState();
+                if (a && a.signedIn && !a.isGuest && a.uid) {
+                    const legacy = this._read(this.KEYS.PROFILES, null);
+                    if (Array.isArray(legacy)) {
+                        list = legacy;
+                        this._write(key, legacy);
+                    }
+                }
+            } catch (e) {}
+            if (list === null) list = [];
+        }
+        return list || [];
     },
     saveProfiles(profiles) {
-        this._write(this.KEYS.PROFILES, profiles);
+        this._write(this._profilesKey(), profiles);
     },
     getProfile(id) {
         return this.getProfiles().find(p => p.id === id) || null;
     },
     getActiveProfileId() {
-        return localStorage.getItem(this.KEYS.ACTIVE_PROFILE) || '';
+        const id = localStorage.getItem(this._activeKey()) || '';
+        if (id) return id;
+        /* First run under namespacing: adopt the legacy active id
+           only when it points at a profile in THIS list, so a
+           refresh still resumes where you were. */
+        try {
+            const a = this.getAuthState();
+            if (a && a.signedIn && !a.isGuest && a.uid) {
+                const legacyId = localStorage.getItem(this.KEYS.ACTIVE_PROFILE) || '';
+                if (legacyId && this.getProfiles().some(p => p.id === legacyId)) {
+                    localStorage.setItem(this._activeKey(), legacyId);
+                    return legacyId;
+                }
+            }
+        } catch (e) {}
+        return '';
     },
     setActiveProfileId(id) {
-        if (id) localStorage.setItem(this.KEYS.ACTIVE_PROFILE, id);
-        else localStorage.removeItem(this.KEYS.ACTIVE_PROFILE);
+        if (id) localStorage.setItem(this._activeKey(), id);
+        else localStorage.removeItem(this._activeKey());
         /* Phase 2: the active profile is part of the cloud doc, so
            a profile switch schedules a push too. */
-        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty('ganime_profiles_list'); } catch (e) {}
+        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty(this._profilesKey()); } catch (e) {}
     },
     clearActiveProfileId() {
-        localStorage.removeItem(this.KEYS.ACTIVE_PROFILE);
+        localStorage.removeItem(this._activeKey());
     },
     getActiveProfile() {
         return this.getProfile(this.getActiveProfileId()) || this.getProfiles()[0];
@@ -301,7 +356,7 @@ const Storage = {
     },
     saveEpDesign(design) {
         localStorage.setItem('ganime_ep_design', design);
-        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty('ganime_profiles_list'); } catch (e) {}
+        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty(this._profilesKey()); } catch (e) {}
     },
 
     /* --- My List (per profile: ganime_mylist_<profileId>) --- */

@@ -64,15 +64,27 @@ const App = {
             /* Wait for the boot sync (max 5s) so a pulled cloud
                profile list is in localStorage before we decide
                between picker and shell. Then re-render profiles. */
+            let bootResult = null;
             if (bootSyncPromise) {
-                try { await Promise.race([bootSyncPromise, new Promise(r => setTimeout(r, 5000))]); } catch (e) {}
+                try { bootResult = await Promise.race([bootSyncPromise, new Promise(r => setTimeout(() => r({ status: 'timeout' }), 5000))]); } catch (e) { bootResult = { status: 'error' }; }
                 try { this.renderProfiles(); } catch (e) {}
             }
             const auth = Storage.getAuthState();
             if (auth.signedIn || auth.isGuest) {
                 let savedScreen = '';
                 try { savedScreen = (JSON.parse(localStorage.getItem('ganime_last_route') || '{}') || {}).screen || ''; } catch (e) {}
-                if (savedScreen === 'add-profile') { this.openAddProfile(); return; }
+                /* Cloud-unreachable guard (2026-10-26 fix): signed
+                   in, the boot pull failed, nothing local — show
+                   retry, never create-first. A stale add-profile
+                   route is likewise ignored when profiles exist. */
+                const bootPullFailed = auth.signedIn && !auth.isGuest && bootResult
+                    && (bootResult.status === 'error' || bootResult.status === 'no-token' || bootResult.status === 'timeout');
+                if (bootPullFailed && !Storage.getProfiles().length) { this.showCloudRetry(); return; }
+                if (savedScreen === 'add-profile') {
+                    if (!Storage.getProfiles().length) { this.openAddProfile(); return; }
+                    /* else fall through: profiles exist, don't let a
+                       stale route hide them behind create-first */
+                }
                 /* Landing rule (2026-10-26, refined same day):
                    a FRESH tab landing (splash not yet played this
                    tab) always goes to the profile picker page for
@@ -230,10 +242,49 @@ const App = {
             const session = await FirebaseAuth.signIn(email, password);
             this._clearAuthPassword();
             Storage.saveAuthState(session);
-            this.showProfilePicker();
+            /* Sign-in pull (2026-10-26 fix): sign-in used to go
+               straight to the picker on local data only, so a
+               wiped device was pushed to create a brand-new
+               profile even though the cloud had its profiles. */
+            await this._pullThenRoute();
         } catch (err) {
             alert('Sign-in error: ' + (err && err.message ? err.message : 'Authentication failed'));
         } finally { this._authBusy(btn, false); }
+    },
+
+    /* Pull-then-route (2026-10-26 fix): a FRESH syncNow, not the
+       bootSync memoized at page boot when there was no session
+       (that one stays "skipped" forever). Success, or local
+       profiles already present, goes to the picker; a failed pull
+       with nothing local goes to the retry screen, never straight
+       to create-first. A failed pull still routes to the picker
+       when local profiles exist (fail open to local). */
+    async _pullThenRoute() {
+        let res = null;
+        try {
+            if (typeof Sync !== 'undefined' && Sync.syncNow) {
+                res = await Promise.race([
+                    Sync.syncNow({}),
+                    new Promise(r => setTimeout(() => r({ status: 'timeout' }), 8000))
+                ]);
+            }
+        } catch (e) { res = { status: 'error' }; }
+        const failed = res && (res.status === 'error' || res.status === 'no-token' || res.status === 'timeout');
+        if (failed && !Storage.getProfiles().length) { this.showCloudRetry(); return; }
+        this.showProfilePicker();
+    },
+
+    /* Cloud-unreachable screen (2026-10-26 fix): Retry re-runs
+       the pull; "Continue on this device" is the user's explicit
+       choice to proceed local-only (the old behaviour), never a
+       silent push toward creating a duplicate profile. */
+    showCloudRetry() {
+        this.openModal(`
+            <h3 class="modal-title">Couldn't reach your cloud</h3>
+            <p class="text-secondary">Your profiles live in the cloud, but the app couldn't reach it just now. Check your connection and try again — don't create a new profile yet, or you'll end up with a duplicate.</p>
+            <button class="btn-primary" onclick="App.closeModal(); App._pullThenRoute()">Retry</button>
+            <button class="btn-secondary" onclick="App.closeModal(); App.showProfilePicker()">Continue on this device</button>
+        `);
     },
 
     async handleSignUp(btn) {
@@ -249,7 +300,10 @@ const App = {
             const session = await FirebaseAuth.signUp(email, password);
             this._clearAuthPassword();
             Storage.saveAuthState(session);
-            this.showProfilePicker();
+            /* Same sign-in pull as handleSignIn: a fresh account
+               pulls (empty cloud) and lands on create-first, while
+               an existing device's local profiles push up. */
+            await this._pullThenRoute();
         } catch (err) {
             alert('Create account error: ' + (err && err.message ? err.message : 'Authentication failed'));
         } finally { this._authBusy(btn, false); }
@@ -636,6 +690,12 @@ const App = {
         for (const key of ['ganime_settings_', 'ganime_addons_', 'ganime_watched_', 'ganime_locallib_', 'ganime_tracking_', 'ganime_mylist_']) {
             localStorage.removeItem(key + id);
         }
+        /* Delete-done rule (2026-10-26 fix): a delete isn't done
+           until its tombstone is in the cloud. Push right now
+           instead of waiting for the 3s debounce — if it fails,
+           the dirty flag plus the next sign-in pull send it.
+           Guest deletes skip (pushOnly is signed-in-only). */
+        try { if (typeof Sync !== 'undefined' && Sync.pushOnly) Sync.pushOnly().catch(() => {}); } catch (e) {}
         if (wasActive) {
             /* You deleted the profile you were using — back to
                the picker (the landing rule's home base), not a
