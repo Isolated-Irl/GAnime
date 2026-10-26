@@ -3502,7 +3502,7 @@ const App = {
                 <div style="height:10px"></div>
                 <button class="btn-white" onclick="App.syncNowManual()">Sync Now</button>
                 <div style="height:8px"></div>
-                <div style="font-size:12px; opacity:0.75; line-height:1.5">Syncs profiles, watched, library, settings and addons to your account. Tracking logins (AniList / Simkl / MAL) and key-bearing addon URLs do NOT sync — reconnect those once per device. If sync fails, first create the Firestore database and set its rules (one-time console steps — ask Nounou for them).</div>
+                <div style="font-size:12px; opacity:0.75; line-height:1.5">Syncs automatically — profiles, watched, library, settings and addons to your account, within seconds of any change and when you leave the app. Tracking logins (AniList / Simkl / MAL) and key-bearing addon URLs do NOT sync — reconnect those once per device. If sync fails, first create the Firestore database and set its rules (one-time console steps — ask Nounou for them).</div>
             </div><div style="height:14px"></div>`;
         }
         return `
@@ -3516,7 +3516,14 @@ const App = {
                 ? `<button class="btn-white" onclick="App.signOut()">Sign In / Create Account</button>`
                 : `<button class="btn-white" onclick="App.signOut()">Sign Out</button>`}
             <div style="height:10px"></div>
-            <button class="btn-secondary" style="color:#f87171; border-color:rgba(248,113,113,0.3)" onclick="App.wipeDeviceData()">Reset All Local Data</button>
+            ${/* Reset rule (2026-10-26, his ruling): when signed in,
+               everything syncs to the cloud by default, so a local
+               reset option only confuses — it is hidden entirely.
+               Guests have no cloud copy, so for them it stays as
+               the only way to clear this device. */
+              isGuest
+                ? `<button class="btn-secondary" style="color:#f87171; border-color:rgba(248,113,113,0.3)" onclick="App.wipeDeviceData()">Reset All Local Data</button>`
+                : ''}
             <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>`;
     },
 

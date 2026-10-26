@@ -145,13 +145,18 @@ const Sync = {
         return this._decodeDoc(json);
     },
 
-    async _putCloud(uid, token, doc) {
+    async _putCloud(uid, token, doc, opts) {
         const fields = Object.keys(doc);
         const qs = fields.map(f => 'updateMask.fieldPaths=' + encodeURIComponent(f)).join('&');
         const res = await fetch(this._docUrl(uid) + '?' + qs, {
             method: 'PATCH',
             headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-            body: JSON.stringify(this._encodeDoc(doc))
+            body: JSON.stringify(this._encodeDoc(doc)),
+            /* Pagehide flush: ask the browser to finish this
+               request even as the tab closes (best effort — the
+               body size limit for such requests is small, so a
+               very large doc may still need the next boot sync). */
+            keepalive: !!(opts && opts.keepalive)
         });
         if (!res.ok) {
             const text = await res.text().catch(() => '');
@@ -208,9 +213,39 @@ const Sync = {
 
     _schedulePush() {
         if (this._pushTimer) clearTimeout(this._pushTimer);
-        /* Debounced 8s after the last write: marking an episode
-           watched, then another, then another becomes ONE push. */
-        this._pushTimer = setTimeout(() => { this._pushTimer = null; this.pushOnly().catch(() => {}); }, 8000);
+        /* Prompt sync (2026-10-26, his ruling: logged-in data
+           must reach the cloud effectively instantly): a burst
+           of writes still batches into ONE push, but only 3s
+           after the last write instead of 8s — fast enough that
+           you never have to think about it, slow enough that
+           marking 20 episodes watched is still one write, not
+           20 (a write on literally every tap would also risk
+           two devices overwriting each other's doc mid-burst). */
+        this._pushTimer = setTimeout(() => { this._pushTimer = null; this.pushOnly().catch(() => {}); }, 3000);
+        this._bindFlush();
+    },
+
+    /* Flush on leaving: closing the tab, switching apps, or
+       hiding the tab pushes any pending changes immediately
+       instead of leaving them to the 3s timer that would never
+       fire. Bound once, on first dirty write. */
+    _bindFlush() {
+        if (this._flushBound) return;
+        this._flushBound = true;
+        try {
+            const flush = () => {
+                if (!this._dirty || !this._ready()) return;
+                this.pushOnly({ keepalive: true }).catch(() => {});
+            };
+            if (typeof window !== 'undefined' && window.addEventListener) {
+                window.addEventListener('pagehide', flush);
+            }
+            if (typeof document !== 'undefined' && document.addEventListener) {
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) flush();
+                });
+            }
+        } catch (e) {}
     },
 
     _setLast(status, detail) {
@@ -486,7 +521,7 @@ const Sync = {
     },
 
     /* ---------- Push only (debounced, after local writes) ---------- */
-    async pushOnly() {
+    async pushOnly(opts) {
         if (!this._ready()) return { status: 'skipped' };
         if (!this._dirty && this._bootDone) return { status: 'clean' };
         const auth = this._auth();
@@ -495,7 +530,7 @@ const Sync = {
         const doc = this.collectLocal();
         if (this._normalizeProfiles(doc)) this.applyDoc(doc);
         try {
-            await this._putCloud(auth.uid, token, doc);
+            await this._putCloud(auth.uid, token, doc, opts);
             this._dirty = false;
             this.lastError = '';
             this._setLast('synced', 'Cloud copy updated');
