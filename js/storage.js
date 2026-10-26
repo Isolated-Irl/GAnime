@@ -30,6 +30,19 @@ const Storage = {
                 localStorage.setItem(key, JSON.stringify(value));
             } catch (e2) { /* storage full/blocked — session stays usable */ }
         }
+        /* Phase 2 cloud sync (2026-10-26): user-data writes mark
+           the store dirty so Sync pushes a batched copy after a
+           short debounce. Tracking keys are deliberately NOT
+           matched here (tokens never sync); caches are not either.
+           Guarded for the script order (storage loads before
+           firestore.js) and for applies (Sync skips while applying). */
+        try {
+            if (typeof Sync !== 'undefined' && Sync.markDirty
+                && (key === 'ganime_profiles_list'
+                    || /^ganime_(settings|addons|watched|locallib|mylist)_/.test(key))) {
+                Sync.markDirty(key);
+            }
+        } catch (e) {}
     },
 
     /* --- Auth --- */
@@ -65,6 +78,9 @@ const Storage = {
     setActiveProfileId(id) {
         if (id) localStorage.setItem(this.KEYS.ACTIVE_PROFILE, id);
         else localStorage.removeItem(this.KEYS.ACTIVE_PROFILE);
+        /* Phase 2: the active profile is part of the cloud doc, so
+           a profile switch schedules a push too. */
+        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty('ganime_profiles_list'); } catch (e) {}
     },
     clearActiveProfileId() {
         localStorage.removeItem(this.KEYS.ACTIVE_PROFILE);
@@ -274,6 +290,7 @@ const Storage = {
     },
     saveEpDesign(design) {
         localStorage.setItem('ganime_ep_design', design);
+        try { if (typeof Sync !== 'undefined' && Sync.markDirty) Sync.markDirty('ganime_profiles_list'); } catch (e) {}
     },
 
     /* --- My List (per profile: ganime_mylist_<profileId>) --- */

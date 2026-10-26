@@ -20,6 +20,13 @@ const App = {
 
     /* ---------- Boot ---------- */
     init() {
+        /* Phase 2 boot sync (2026-10-26): starts immediately, so a
+           new browser can pull the cloud profiles BEFORE the
+           profile-picker decision below. proceed() awaits it with
+           a 5s timeout — a slow/failed sync never blocks boot,
+           it just leaves local data untouched. Guests never sync. */
+        let bootSyncPromise = null;
+        try { if (typeof Sync !== 'undefined') bootSyncPromise = Sync.bootSync(); } catch (e) {}
         this.loadTitleCache();
         this.bindTouchLongPress();
         this.bindHoverDismiss();
@@ -51,9 +58,16 @@ const App = {
            skip it via sessionStorage. Logo click still replays
            it (replaySplash clears the skip class). */
         const splash = document.getElementById('splashScreen');
-        const proceed = () => {
+        const proceed = async () => {
             splash.classList.add('hidden');
             splash.classList.remove('splash-fading');
+            /* Wait for the boot sync (max 5s) so a pulled cloud
+               profile list is in localStorage before we decide
+               between picker and shell. Then re-render profiles. */
+            if (bootSyncPromise) {
+                try { await Promise.race([bootSyncPromise, new Promise(r => setTimeout(r, 5000))]); } catch (e) {}
+                try { this.renderProfiles(); } catch (e) {}
+            }
             const auth = Storage.getAuthState();
             if (auth.signedIn || auth.isGuest) {
                 let savedScreen = '';
@@ -3382,18 +3396,51 @@ const App = {
         const auth = Storage.getAuthState();
         const isGuest = !!auth.isGuest;
         const status = isGuest ? 'Guest (Local Only)' : (auth.email || 'Signed in');
+        /* Phase 2 cloud sync status (2026-10-26): read from the
+           last sync record; guests see a plain note instead. */
+        let syncBlock = '';
+        if (isGuest) {
+            syncBlock = `<div class="settings-group">${this.sInfo('Cloud Sync', 'Off — guest mode does not sync. Sign in to sync.')}</div><div style="height:14px"></div>`;
+        } else {
+            let syncText = 'Never synced yet';
+            try {
+                const last = (typeof Sync !== 'undefined' && Sync.getLast()) || null;
+                if (last) syncText = (last.status === 'synced' ? 'Last synced ' : 'Last sync: ' + last.status + ' — ')
+                    + new Date(last.at).toLocaleString() + (last.detail ? ' · ' + last.detail : '');
+                else if (Sync && Sync.lastError) syncText = 'Error: ' + Sync.lastError;
+            } catch (e) {}
+            syncBlock = `<div class="settings-group">
+                ${this.sInfo('Cloud Sync', this.esc(syncText))}
+                <div style="height:10px"></div>
+                <button class="btn-white" onclick="App.syncNowManual()">Sync Now</button>
+                <div style="height:8px"></div>
+                <div style="font-size:12px; opacity:0.75; line-height:1.5">Syncs profiles, watched, library, settings and addons to your account. Tracking logins (AniList / Simkl / MAL) and key-bearing addon URLs do NOT sync — reconnect those once per device. If sync fails, first create the Firestore database and set its rules (one-time console steps — ask Nounou for them).</div>
+            </div><div style="height:14px"></div>`;
+        }
         return `
             <div class="panel-title">Account</div>
             <div class="settings-group">
                 ${this.sInfo('Status', status)}
             </div>
             <div style="height:14px"></div>
+            ${syncBlock}
             ${isGuest
                 ? `<button class="btn-white" onclick="App.signOut()">Sign In / Create Account</button>`
                 : `<button class="btn-white" onclick="App.signOut()">Sign Out</button>`}
             <div style="height:10px"></div>
             <button class="btn-secondary" style="color:#f87171; border-color:rgba(248,113,113,0.3)" onclick="App.wipeDeviceData()">Reset All Local Data</button>
             <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>`;
+    },
+
+    /* Manual Phase 2 sync from Settings → Account. Merges this
+       device with the cloud, then refreshes the settings view so
+       the new status shows. A pulled profile list appears in the
+       profile picker on the next visit to it. */
+    async syncNowManual() {
+        if (typeof Sync === 'undefined') { alert('Cloud sync is not loaded in this build.'); return; }
+        const r = await Sync.syncNow({ manual: true });
+        alert(r.message || ('Sync: ' + r.status));
+        try { this.renderSettings(); } catch (e) {}
     },
 
     /* Reset All Local Data — the ONLY wipe in the app, behind a
