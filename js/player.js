@@ -33,6 +33,23 @@
 //    movi paints to a canvas. All transport goes through the
 //    movi element's HTMLMediaElement-parity properties.
 // ============================================================
+/* ------------------------------------------------------------
+   2026-10-26 changes (player_2):
+   1. Episodes + Sources popups now share ONE panel look and open /
+      close with the same fade + lift as the rest of the player.
+      Their colours, corner radius, shadow, accent and motion come
+      from movi's own --movi-* theme variables, read live from the
+      element (see _syncMoviTheme). If movi exposes nothing usable
+      the dark-glass defaults below are used. The result is logged
+      to the console as "[GAnime] movi theme sync".
+   2. iPhone / iPad fullscreen. iOS Safari has NO element
+      fullscreen for a <div> or <canvas>, and movi paints to a
+      canvas, so auto-fullscreen could never fire. On iOS the
+      overlay now goes "pseudo fullscreen" (fixed, full viewport,
+      page scroll locked) automatically, and a one-time hint
+      explains Add to Home Screen, the only way a website gets
+      the browser bars hidden on iPhone.
+   ------------------------------------------------------------ */
 const Player = {
     movi: null,
     currentUrl: '',
@@ -227,6 +244,60 @@ const Player = {
             .gp-src-badge.ok { color: #4ade80; }
             .gp-src-badge.warn { color: #fbbf24; }
             .gp-src-empty { color: #9fb0b0; font-size: 13px; padding: 14px 6px; }
+
+            /* ===== 2026-10-26: one shared panel language, movi-themed ===== */
+            #playerOverlay { --gp-bg: rgba(18,19,24,0.97); --gp-border: rgba(255,255,255,0.14); --gp-radius: 14px;
+                --gp-shadow: 0 18px 50px rgba(0,0,0,0.6); --gp-dur: 0.22s; --gp-ease: cubic-bezier(0.4, 0, 0.2, 1);
+                --gp-accent: var(--accent, #fff); --gp-on-accent: var(--on-accent, #101418);
+                --gp-muted: #9a9aa5; --gp-hover: rgba(255,255,255,0.08); }
+            .gp-movi-pop, .gp-src { background: var(--gp-bg); border: 1px solid var(--gp-border); border-radius: var(--gp-radius);
+                box-shadow: var(--gp-shadow); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+            /* Open / close = fade + small lift, never display:none snapping. */
+            .gp-movi-pop { display: block; visibility: hidden; opacity: 0; pointer-events: none;
+                transform: translateX(-50%) translateY(10px) scale(0.98); transform-origin: 50% 100%;
+                transition: opacity var(--gp-dur) var(--gp-ease), transform var(--gp-dur) var(--gp-ease), visibility 0s linear var(--gp-dur); }
+            .gp-movi-pop.open { visibility: visible; opacity: 1; pointer-events: auto;
+                transform: translateX(-50%) translateY(0) scale(1); transition-delay: 0s; }
+            .gp-src-back { display: flex; visibility: hidden; opacity: 0; pointer-events: none; background: rgba(0,0,0,0.42);
+                transition: opacity var(--gp-dur) var(--gp-ease), visibility 0s linear var(--gp-dur); }
+            .gp-src-back.open { visibility: visible; opacity: 1; pointer-events: auto; transition-delay: 0s; }
+            .gp-src { width: min(520px, 94vw); max-height: 78vh; padding: 12px;
+                transform: translateY(12px) scale(0.98); transition: transform var(--gp-dur) var(--gp-ease); }
+            .gp-src-back.open .gp-src { transform: none; }
+            .gp-src-head { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+            .gp-src-title { font-size: 13.5px; font-weight: 800; }
+            .gp-src-btn { background: rgba(255,255,255,0.1); border: none; border-radius: 9px; font-size: 12px; padding: 6px 12px; }
+            .gp-src-btn:hover { background: rgba(255,255,255,0.18); }
+            .gp-src-chips { gap: 6px; flex-wrap: wrap; overflow: visible; padding-bottom: 10px; }
+            .gp-src-chip { font-size: 11.5px; padding: 5px 10px; border-radius: 8px; background: rgba(255,255,255,0.08);
+                border: 1px solid rgba(255,255,255,0.15); color: #fff; }
+            .gp-src-chip.active, .gp-movi-chip.active { background: var(--gp-accent); color: var(--gp-on-accent); border-color: var(--gp-accent); }
+            .gp-src-list { gap: 4px; }
+            .gp-src-card { background: transparent; border: 1px solid transparent; border-radius: 9px; padding: 8px 10px; }
+            .gp-src-card:hover { background: var(--gp-hover); }
+            .gp-src-card.current, .gp-movi-row.active { border-color: var(--gp-accent); background: rgba(255,255,255,0.06); }
+            .gp-src-name { font-size: 13px; font-weight: 700; }
+            .gp-src-desc, .gp-src-addon, .gp-src-empty { color: var(--gp-muted); }
+            .gp-src-desc { font-size: 11.5px; }
+            .gp-movi-sec { color: var(--gp-muted); }
+            #aniskipBtn { background: var(--gp-bg); border-color: var(--gp-border); box-shadow: var(--gp-shadow);
+                border-radius: calc(var(--gp-radius) - 4px); animation: gpPopFade var(--gp-dur) var(--gp-ease); }
+            #playerMsg { background: var(--gp-bg); border-color: var(--gp-border); box-shadow: var(--gp-shadow);
+                border-radius: var(--gp-radius); }
+            #playerMsg:not(.hidden) { animation: gpPopFadeMsg var(--gp-dur) var(--gp-ease); }
+            @keyframes gpPopFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+            @keyframes gpPopFadeMsg { from { opacity: 0; transform: translateX(-50%) translateY(6px); } to { opacity: 1; transform: translateX(-50%); } }
+            @media (prefers-reduced-motion: reduce) {
+                .gp-movi-pop, .gp-src-back, .gp-src { transition: none !important; }
+                #aniskipBtn, #playerMsg:not(.hidden) { animation: none !important; }
+            }
+
+            /* ===== iOS pseudo fullscreen ===== */
+            #playerOverlay.gp-pseudo-fs { position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+                width: 100% !important; height: 100vh !important; height: -webkit-fill-available !important; height: 100dvh !important; z-index: 9999 !important; }
+            html.gp-pfs-lock, html.gp-pfs-lock body { overflow: hidden !important; overscroll-behavior: none !important; }
+            .gp-movi-top { padding-top: calc(14px + env(safe-area-inset-top, 0px)); padding-right: calc(18px + env(safe-area-inset-right, 0px)); }
+            #aniskipBtn { right: calc(20px + env(safe-area-inset-right, 0px)); }
         `;
         document.head.appendChild(st);
     },
@@ -349,14 +420,162 @@ const Player = {
             } catch (e) {}
             return true;
         }
-        /* Last resort: no video fullscreen API either — at least
-           stack the overlay above everything else. */
-        if (overlay) {
-            overlay.classList.toggle('gp-pseudo-fs');
-            const btn = document.getElementById('gpFsBtn');
-            if (btn) btn.innerHTML = overlay.classList.contains('gp-pseudo-fs') ? this._svgCompress() : this._svgExpand();
-        }
+        /* No <video> to fullscreen (movi paints to a canvas): use
+           pseudo fullscreen, which also locks page scroll. */
+        if (overlay) this._setPseudoFs(!overlay.classList.contains('gp-pseudo-fs'));
         return true;
+    },
+
+    _isIOS() {
+        try {
+            const ua = navigator.userAgent || '';
+            return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        } catch (e) { return false; }
+    },
+
+    _isStandalone() {
+        try {
+            return navigator.standalone === true || !!(window.matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches));
+        } catch (e) { return false; }
+    },
+
+    /* "Pseudo" fullscreen: the overlay fills the whole visible
+       viewport and the page behind cannot scroll. This is the most
+       a website can do on iPhone Safari, which has no Fullscreen
+       API for a div or a canvas (movi renders to a canvas). */
+    _setPseudoFs(on) {
+        const overlay = document.getElementById('playerOverlay');
+        if (overlay) overlay.classList.toggle('gp-pseudo-fs', !!on);
+        try { document.documentElement.classList.toggle('gp-pfs-lock', !!on); } catch (e) {}
+        const btn = document.getElementById('gpFsBtn');
+        if (btn) btn.innerHTML = on ? this._svgCompress() : this._svgExpand();
+    },
+
+    /* One-time hint: Safari cannot hide its own toolbar for a
+       website; an installed Home Screen app has no toolbar at all. */
+    _maybeShowIosHint() {
+        let seen = false;
+        try { seen = localStorage.getItem('ganime_ios_fs_hint_v1') === '1'; } catch (e) {}
+        if (seen) return;
+        setTimeout(() => {
+            if (!document.getElementById('playerMsg') || !this.currentUrl) return;
+            this._showMsg('<b>Want true fullscreen on iPhone?</b><br>Safari does not let websites hide its toolbar. '
+                + 'Tap <b>Share → Add to Home Screen</b>, then open GAnime from that icon.<br>'
+                + '<button class="btn-primary" onclick="Player._dismissIosHint()">Got it</button>');
+        }, 1600);
+    },
+
+    _dismissIosHint() {
+        try { localStorage.setItem('ganime_ios_fs_hint_v1', '1'); } catch (e) {}
+        this._hideMsg();
+    },
+
+    /* ---------- movi theme sync ----------
+       movi is themed through --movi-* CSS custom properties. Their
+       names are not documented to us, so they are discovered live
+       from the element's own stylesheets, then only SANE values are
+       taken (dark panel colour, 6-24px radius, 100-500ms motion).
+       Anything missing keeps the dark-glass defaults. */
+    _moviVarNames(el) {
+        const names = new Set();
+        const add = (txt) => { (String(txt || '').match(/--movi-[a-z0-9-]+/gi) || []).forEach(n => names.add(n)); };
+        const scan = (sheet) => { try { for (const r of sheet.cssRules) add(r.cssText); } catch (e) {} };
+        try {
+            const root = el.shadowRoot;
+            if (root) {
+                for (const s of (root.styleSheets || [])) scan(s);
+                for (const s of (root.adoptedStyleSheets || [])) scan(s);
+                root.querySelectorAll('style').forEach(s => add(s.textContent));
+            }
+        } catch (e) {}
+        try { for (const s of document.styleSheets) scan(s); } catch (e) {}
+        return Array.from(names);
+    },
+
+    _syncMoviTheme() {
+        const ov = document.getElementById('playerOverlay');
+        const el = this.movi;
+        if (!ov || !el) return;
+        let names = [];
+        try { names = this._moviVarNames(el); } catch (e) {}
+        if (!names.length) { this._themeInfo = { found: 0 }; return; }
+        const cs = getComputedStyle(el);
+        const read = (n) => cs.getPropertyValue(n).trim();
+        const toRgba = (v) => {
+            if (!v || !(window.CSS && CSS.supports && CSS.supports('color', v))) return null;
+            const c = document.createElement('canvas').getContext('2d');
+            c.fillStyle = '#010203';
+            c.fillStyle = v;
+            const s = c.fillStyle;
+            let m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(s);
+            if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1];
+            m = /^rgba?\(([^)]+)\)$/.exec(s);
+            if (m) { const p = m[1].split(',').map(parseFloat); return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1]; }
+            return null;
+        };
+        const lum = (c) => (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+        const colour = (patterns, ok, skip) => {
+            for (const re of patterns) {
+                for (const n of names) {
+                    if (!re.test(n) || (skip && skip.test(n))) continue;
+                    const v = read(n);
+                    const c = toRgba(v);
+                    if (c && (!ok || ok(c))) return { value: v, rgba: c };
+                }
+            }
+            return null;
+        };
+        const PANEL = '(menu|panel|popup|popover|settings|surface|dropdown)';
+        const bg = colour([new RegExp(PANEL + '.*(bg|background)', 'i'), new RegExp('(bg|background).*' + PANEL, 'i'), /^--movi-(bg|background)$/i],
+            c => lum(c) < 0.4 && c[3] >= 0.5);
+        const border = colour([new RegExp(PANEL + '.*border', 'i'), /border/i], null);
+        const accent = colour([/^--movi-(accent|primary|theme|brand)(-color)?$/i, /accent|primary/i], c => c[3] > 0.5,
+            /(bg|background|hover|text|fg|contrast|shadow|glow|rgb)/i);
+        let radius = null;
+        for (const re of [new RegExp(PANEL + '.*radius', 'i'), /radius.*(menu|panel|popup)/i, /radius(-(md|medium|lg|large|base|default))?$/i]) {
+            for (const n of names) {
+                if (!re.test(n)) continue;
+                const m = /^([\d.]+)px$/.exec(read(n));
+                if (m && +m[1] >= 6 && +m[1] <= 24) { radius = m[0]; break; }
+            }
+            if (radius) break;
+        }
+        let shadow = null;
+        for (const n of names) {
+            if (!new RegExp(PANEL + '.*shadow', 'i').test(n)) continue;
+            const v = read(n);
+            if (v && /px/.test(v) && !/^none/.test(v)) { shadow = v; break; }
+        }
+        let dur = null, ease = null;
+        for (const n of names) {
+            if (!/(duration|transition|motion)/i.test(n)) continue;
+            const v = read(n);
+            const t = /(\d*\.?\d+)(ms|s)\b/.exec(v);
+            if (t && !dur) {
+                const ms = t[2] === 's' ? parseFloat(t[1]) * 1000 : parseFloat(t[1]);
+                if (ms >= 100 && ms <= 500) dur = Math.round(ms) + 'ms';
+            }
+            const e = /(cubic-bezier\([^)]*\)|ease-in-out|ease-out|ease-in|ease|linear)/.exec(v);
+            if (e && !ease) ease = e[1];
+        }
+        for (const n of names) {
+            if (ease || !/(ease|easing|curve)/i.test(n)) continue;
+            const v = read(n);
+            if (v && window.CSS && CSS.supports && CSS.supports('transition-timing-function', v)) ease = v;
+        }
+        const set = (k, v) => { if (v) ov.style.setProperty(k, v); };
+        set('--gp-bg', bg && bg.value);
+        set('--gp-border', border && border.value);
+        if (accent) {
+            set('--gp-accent', accent.value);
+            set('--gp-on-accent', lum(accent.rgba) > 0.55 ? '#101418' : '#ffffff');
+        }
+        set('--gp-radius', radius);
+        set('--gp-shadow', shadow);
+        set('--gp-dur', dur);
+        set('--gp-ease', ease);
+        this._themeInfo = { found: names.length, names: names, applied: { bg: bg && bg.value, border: border && border.value, accent: accent && accent.value, radius, shadow, dur, ease } };
+        try { console.info('[GAnime] movi theme sync', this._themeInfo); } catch (e) {}
     },
 
     /* AniSkip: community OP/ED timestamps, keyed by MAL ID.
@@ -403,11 +622,21 @@ const Player = {
         this._sourcesOpen = false;
         this._episodesOpen = false;
         clearInterval(this._srcPoll);
-        if (settings.autoFullscreen !== false && !document.fullscreenElement) {
+        if (settings.autoFullscreen !== false && !document.fullscreenElement && !document.webkitFullscreenElement) {
             try {
                 const fp = overlay.requestFullscreen ? overlay.requestFullscreen() : (overlay.webkitRequestFullscreen ? overlay.webkitRequestFullscreen() : null);
                 if (fp && fp.catch) fp.catch(() => {});
             } catch (e) {}
+            if (!this._nativeFsAvailable(overlay)) {
+                /* iPhone: no element fullscreen exists at all. */
+                this._setPseudoFs(true);
+            } else if (this._isIOS()) {
+                /* iPad: the API exists but may silently refuse. */
+                setTimeout(() => {
+                    if (!document.fullscreenElement && !document.webkitFullscreenElement && this.currentUrl === url) this._setPseudoFs(true);
+                }, 450);
+            }
+            if (this._isIOS() && !this._isStandalone()) this._maybeShowIosHint();
         }
 
         this.ensureStyles();
@@ -434,7 +663,7 @@ const Player = {
         overlay.innerHTML = `
             <div id="moviContainer"></div>
             <div class="gp-movi-top">
-                ${showFsBtn ? `<button id="gpFsBtn" title="Fullscreen">${this._svgExpand()}</button>` : ''}
+                ${showFsBtn ? `<button id="gpFsBtn" title="Fullscreen">${overlay.classList.contains('gp-pseudo-fs') ? this._svgCompress() : this._svgExpand()}</button>` : ''}
                 <button id="gpMoviEpBtn" title="Episodes (E)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><circle cx="4" cy="6" r="1.5" fill="currentColor"></circle><circle cx="4" cy="12" r="1.5" fill="currentColor"></circle><circle cx="4" cy="18" r="1.5" fill="currentColor"></circle></svg></button>
                 <button id="gpMoviSrcBtn" title="Sources (S)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
                 <button id="gpExt" title="Open in MPV / VLC (.m3u)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></button>
@@ -558,6 +787,7 @@ const Player = {
                 ]);
             }
         } catch (e) {}
+        try { this._syncMoviTheme(); setTimeout(() => this._syncMoviTheme(), 900); } catch (e) {}
         /* Closed while waiting for the CDN? Do not start playback
            on a torn-down player. */
         if (!this.movi || this.currentUrl !== url) return;
@@ -1212,12 +1442,27 @@ const Player = {
         } catch (e) { this._epRangeStart = 1; }
         this.renderEpisodes();
         pop.classList.add('open');
+        /* Like movi's own menus: a tap anywhere else closes it. */
+        const ovEl = document.getElementById('playerOverlay');
+        if (ovEl) {
+            if (this._epOutside) ovEl.removeEventListener('pointerdown', this._epOutside, true);
+            this._epOutside = (e) => {
+                const p = document.getElementById('gpMoviEp');
+                const tg = e.target;
+                if (!p || p.contains(tg)) return;
+                if (tg.closest && tg.closest('#gpMoviEpBtn, #gpMoviSrcBtn')) return;
+                this.closeEpisodes();
+            };
+            ovEl.addEventListener('pointerdown', this._epOutside, true);
+        }
     },
 
     closeEpisodes() {
         this._episodesOpen = false;
         const pop = document.getElementById('gpMoviEp');
         if (pop) pop.classList.remove('open');
+        const _ovE = document.getElementById('playerOverlay');
+        if (_ovE && this._epOutside) { _ovE.removeEventListener('pointerdown', this._epOutside, true); this._epOutside = null; }
             this._wakeTopBar();
     },
 
@@ -1280,9 +1525,11 @@ const Player = {
         this.closeEpisodes();
         this._sourcesOpen = true;
         this._srcFilter = 'all';
-        back.classList.add('open');
         back.onclick = (e) => { if (e.target === back) this.closeSources(); };
+        /* Build the panel first, THEN add .open, so it animates in. */
         this.renderSources();
+        void back.offsetWidth;
+        back.classList.add('open');
     },
 
     closeSources() {
@@ -1358,6 +1605,8 @@ const Player = {
         let status = '';
         if (st && st.loading && !list.length) status = '<div class="gp-src-empty">Fetching streams from your addons…</div>';
         else if (!list.length) status = '<div class="gp-src-empty">No playable streams here.</div>';
+        const _prevList = back.querySelector('.gp-src-list');
+        const _prevTop = _prevList ? _prevList.scrollTop : 0;
         back.innerHTML = `
             <div class="gp-src" onclick="event.stopPropagation()">
                 <div class="gp-src-head">
@@ -1368,6 +1617,8 @@ const Player = {
                 <div class="gp-src-chips">${chips}</div>
                 <div class="gp-src-list">${cards}${status}</div>
             </div>`;
+        const _newList = back.querySelector('.gp-src-list');
+        if (_newList && _prevTop) _newList.scrollTop = _prevTop;
     },
 
     playSource(n) {
@@ -1449,6 +1700,7 @@ const Player = {
     },
 
     close() {
+        this._setPseudoFs(false);
         if (document.fullscreenElement && document.exitFullscreen) {
             try { const p = document.exitFullscreen(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
         }
@@ -1466,6 +1718,7 @@ const Player = {
             if (this._wheelHandler) { try { _ov.removeEventListener('wheel', this._wheelHandler); } catch (e) {} }
         }
         this._moveHandler = null; this._wheelHandler = null;
+        if (_ov && this._epOutside) { try { _ov.removeEventListener('pointerdown', this._epOutside, true); } catch (e) {} this._epOutside = null; }
         this.destroyInstance();
         const overlay = document.getElementById('playerOverlay');
         if (overlay) {
