@@ -275,6 +275,15 @@ const App = {
                 ]);
             }
         } catch (e) { res = { status: 'error' }; }
+        /* Bug 2 (2026-10-26 audit): bootSync memoized 'skipped' at
+           page boot (no session) never set _bootDone, and syncNow
+           doesn't either — so pushOnly could never early-return
+           clean after a sign-in pull. Mark boot done, but only on
+           a successful pull (a failed pull must not claim it). */
+        try {
+            if (res && ['pulled', 'merged', 'pushed', 'empty'].includes(res.status)
+                && typeof Sync !== 'undefined') Sync._bootDone = true;
+        } catch (e) {}
         const failed = res && (res.status === 'error' || res.status === 'no-token' || res.status === 'timeout');
         if (failed && !Storage.getProfiles().length) { this.showCloudRetry(); return; }
         this.showProfilePicker();

@@ -79,6 +79,31 @@ const Storage = {
     _activeKey() {
         return 'ganime_active_' + this._ownerSuffix();
     },
+    /* Bug 1 (2026-10-26 audit): the legacy shared list belonged to
+       whoever used this browser before namespacing. A DIFFERENT
+       signed-in user must never adopt it — that is account bleed.
+       Adopt only when no other account has used this browser:
+       no recorded legacy owner (or it matches this uid), and no
+       other namespaced list exists. The first adopter records
+       itself as the legacy owner. */
+    _mayAdoptLegacy(uid) {
+        try {
+            const owner = localStorage.getItem('ganime_legacy_owner');
+            if (owner && owner !== String(uid)) return false;
+            const mine = 'ganime_profiles_' + uid;
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.indexOf('ganime_profiles_') === 0
+                        && k !== 'ganime_profiles_list'
+                        && k !== 'ganime_profiles_guest'
+                        && k !== mine) return false;
+                }
+            } catch (e) {}
+            try { localStorage.setItem('ganime_legacy_owner', String(uid)); } catch (e) {}
+            return true;
+        } catch (e) { return false; }
+    },
     getProfiles() {
         // Version marker only — profiles are NEVER (re)seeded.
         // No stored list = no profiles yet (create-first flow).
@@ -90,13 +115,15 @@ const Storage = {
         let list = this._read(key, null);
         if (list === null) {
             /* First run under namespacing: a signed-in session
-               adopts the legacy shared list once (copy). Guest
-               never adopts — its list starts empty. */
+               adopts the legacy shared list once (copy), and only
+               when no other account has used this browser (Bug 1
+               guard in _mayAdoptLegacy). Guest never adopts — its
+               list starts empty. */
             try {
                 const a = this.getAuthState();
                 if (a && a.signedIn && !a.isGuest && a.uid) {
                     const legacy = this._read(this.KEYS.PROFILES, null);
-                    if (Array.isArray(legacy)) {
+                    if (Array.isArray(legacy) && this._mayAdoptLegacy(a.uid)) {
                         list = legacy;
                         this._write(key, legacy);
                     }

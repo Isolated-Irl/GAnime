@@ -51,6 +51,19 @@ const FirebaseAuth = {
         return m.replace(/_/g, ' ');
     },
 
+    /* Bug 8 (2026-10-26 audit): older webviews lack
+       AbortSignal.timeout — calling it throws before fetch even
+       starts. Use it when present, else a manual controller that
+       aborts after the same delay (fetch maps it to TIMEOUT). */
+    _createTimeoutSignal(ms) {
+        try {
+            if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+        } catch (e) {}
+        const c = new AbortController();
+        setTimeout(() => { try { c.abort(); } catch (e) {} }, ms);
+        return c.signal;
+    },
+
     async _post(url, body) {
         let res;
         try {
@@ -58,7 +71,7 @@ const FirebaseAuth = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
-                signal: AbortSignal.timeout(12000)
+                signal: this._createTimeoutSignal(12000)
             });
         } catch (e) {
             if (e && e.name === 'AbortError') {
@@ -127,7 +140,7 @@ const FirebaseAuth = {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refreshToken),
-                    signal: AbortSignal.timeout(12000)
+                    signal: this._createTimeoutSignal(12000)
                 }
             );
         } catch (e) {
@@ -173,7 +186,10 @@ const FirebaseAuth = {
         try { auth = (typeof Storage !== 'undefined' && Storage.getAuthState()) || null; } catch (e) { auth = null; }
         if (!auth || !auth.signedIn || auth.isGuest) return null;
         if (auth.idToken && auth.expiresAt && auth.expiresAt > Date.now() + 60000) return auth.idToken;
-        if (!auth.refreshToken || !this.isConfigured()) return auth.idToken || null;
+        /* Bug 5 (2026-10-26 audit): never hand back an already-expired
+           token — it only produces 401s and a misleading "rules are
+           blocking" message. A still-valid token is still returned. */
+        if (!auth.refreshToken || !this.isConfigured()) return (auth.expiresAt && auth.expiresAt > Date.now()) ? auth.idToken : null;
         try {
             const r = await this._refresh(auth.refreshToken);
             const next = Object.assign({}, auth, { idToken: r.idToken, refreshToken: r.refreshToken, expiresAt: r.expiresAt });
@@ -185,7 +201,7 @@ const FirebaseAuth = {
                 this._lastRefreshPermanent = true;
                 return null;
             }
-            return auth.idToken || null;
+            return (auth.expiresAt && auth.expiresAt > Date.now()) ? auth.idToken : null;
         }
     }
 };
