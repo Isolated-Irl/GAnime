@@ -198,8 +198,13 @@ const Storage = {
         const pid = profileId || this.getActiveProfileId();
         const map = this.getWatched(pid);
         const entry = map[titleId] || { eps: [], meta: null, updatedAt: 0 };
-        if (entry.eps.includes(ep)) entry.eps = entry.eps.filter(n => n !== ep);
-        else entry.eps.push(ep);
+        if (entry.eps.includes(ep)) {
+            entry.eps = entry.eps.filter(n => n !== ep);
+            /* Sync tombstone (2026-10-26): without this, the
+               union merge resurrects the un-marked episode from
+               the other device's copy on the next sync. */
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('watched', pid, titleId, ep); } catch (e) {}
+        } else entry.eps.push(ep);
         if (meta) entry.meta = { ...(entry.meta || {}), ...meta };
         entry.updatedAt = Date.now();
         map[titleId] = entry;
@@ -229,8 +234,11 @@ const Storage = {
         entry.status = status;
         if (meta) entry.meta = { ...(entry.meta || {}), ...meta };
         entry.updatedAt = Date.now();
-        if (!entry.status && !(entry.savedEps || []).length) delete map[titleId];
-        else map[titleId] = entry;
+        if (!entry.status && !(entry.savedEps || []).length) {
+            delete map[titleId];
+            /* Sync tombstone (2026-10-26): whole-entry delete. */
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('locallib', profileId || this.getActiveProfileId(), titleId); } catch (e) {}
+        } else map[titleId] = entry;
         this.saveLocalLibrary(map, profileId);
         return entry;
     },
@@ -241,8 +249,11 @@ const Storage = {
         entry.savedEps = eps.includes(ep) ? eps.filter(n => n !== ep) : eps.concat([ep]);
         if (meta) entry.meta = { ...(entry.meta || {}), ...meta };
         entry.updatedAt = Date.now();
-        if (!entry.status && !entry.savedEps.length) delete map[titleId];
-        else map[titleId] = entry;
+        if (!entry.status && !entry.savedEps.length) {
+            delete map[titleId];
+            /* Sync tombstone (2026-10-26): whole-entry delete. */
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('locallib', profileId || this.getActiveProfileId(), titleId); } catch (e) {}
+        } else map[titleId] = entry;
         this.saveLocalLibrary(map, profileId);
         return entry.savedEps;
     },
@@ -302,6 +313,8 @@ const Storage = {
         let list = this.getMyList(pid);
         if (list.includes(titleId)) {
             list = list.filter(id => id !== titleId);
+            /* Sync tombstone (2026-10-26): see toggleWatched. */
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('mylist', pid, titleId); } catch (e) {}
         } else {
             list.push(titleId);
         }

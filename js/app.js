@@ -594,6 +594,10 @@ const App = {
         const profiles = Storage.getProfiles();
         const target = profiles.find(p => p.id === id);
         if (!target) return;
+        /* Sync tombstone (2026-10-26): without this, the union
+           merge resurrects the deleted profile from the other
+           device's copy on the next sync. */
+        try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('profiles', id); } catch (e) {}
         const remaining = profiles.filter(p => p.id !== id);
         const wasPrimary = !!target.isPrimary;
         const wasActive = Storage.getActiveProfileId() === id;
@@ -2988,6 +2992,7 @@ const App = {
                     try {
                         const fresh = await Addons.fetchManifest(s.manifestUrl);
                         fresh.enabled = s.enabled;
+                        fresh.addedAt = s.addedAt || 0;
                         const at = all.findIndex(x => x.manifestUrl === s.manifestUrl);
                         if (at >= 0) all[at] = fresh;
                     } catch (e) { /* keep the stale record */ }
@@ -4395,7 +4400,7 @@ const App = {
                     <button class="btn-mini" ${i === 0 ? 'disabled' : ''} onclick="App.moveAddon(${i},-1)">↑</button>
                     <button class="btn-mini" ${i === addons.length - 1 ? 'disabled' : ''} onclick="App.moveAddon(${i},1)">↓</button>
                 </div>
-                <div class="addon-logo">${(a.logo && /^https?:\/\//i.test(a.logo)) ? `<img src="${this.esc(a.logo)}" alt="">` : `<span>${a.name.charAt(0)}</span>`}</div>
+                <div class="addon-logo">${(a.logo && /^https?:\/\//i.test(a.logo)) ? `<img src="${this.esc(a.logo)}" alt="">` : `<span>${this.esc(a.name.charAt(0))}</span>`}</div>
                 <div class="addon-info">
                     <div class="addon-name">${this.esc(a.name)} ${a.version ? `<span class="version-chip">v${this.esc(a.version)}</span>` : ''}</div>
                     ${a.description ? `<div class="setting-desc addon-desc">${this.esc(a.description)}</div>` : ''}
@@ -4448,6 +4453,10 @@ const App = {
                 this.addonStatus(record.name + ' is already installed.');
                 return;
             }
+            /* Install timestamp (2026-10-26): the addon tombstone
+               rule needs it — a re-install after a delete survives
+               only because its addedAt beats the tombstone. */
+            record.addedAt = Date.now();
             addons.push(record);
             Storage.saveAddons(addons);
             this.openSettingsPage('addons');
@@ -4488,6 +4497,10 @@ const App = {
         try {
             const fresh = await Addons.fetchManifest(current.manifestUrl);
             fresh.enabled = current.enabled;
+            /* Keep the original install time: a refresh must not
+               look like a re-install, or it would beat a delete
+               tombstone it should obey. */
+            fresh.addedAt = current.addedAt || 0;
             addons[index] = fresh;
             Storage.saveAddons(addons);
             this.openSettingsPage('addons');
@@ -4501,6 +4514,14 @@ const App = {
         const current = addons[index];
         if (!current) return;
         if (!confirm('Remove ' + current.name + '?')) return;
+        /* Sync tombstone (2026-10-26): the list being edited
+           belongs to the addon OWNER (sharing profiles edit the
+           primary's list), so the tombstone is keyed by owner. */
+        try {
+            if (typeof Sync !== 'undefined' && Sync.recordDeleted) {
+                Sync.recordDeleted('addons', Storage.getAddonOwnerId(), current.manifestUrl || current.id);
+            }
+        } catch (e) {}
         addons.splice(index, 1);
         Storage.saveAddons(addons);
         this.openSettingsPage('addons');
