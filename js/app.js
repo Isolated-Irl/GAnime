@@ -651,7 +651,7 @@ const App = {
         /* Sync tombstone (2026-10-26): without this, the union
            merge resurrects the deleted profile from the other
            device's copy on the next sync. */
-        try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('profiles', id); } catch (e) {}
+        try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('profiles', id, id); } catch (e) {}
         const remaining = profiles.filter(p => p.id !== id);
         const wasPrimary = !!target.isPrimary;
         const wasActive = Storage.getActiveProfileId() === id;

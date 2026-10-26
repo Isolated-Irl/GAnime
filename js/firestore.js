@@ -93,6 +93,11 @@ const Sync = {
        the next debounced push (the accompanying store write
        already marked the doc dirty). */
     recordDeleted(kind, pid, key, subkey) {
+        /* Profiles pass their id as pid (the delete site uses the
+           2-arg form); treat it as the key, or the guard below
+           silently drops every profile delete — which is exactly
+           why profile deletes never stuck before this fix. */
+        if (kind === 'profiles' && !key) key = pid;
         if (!kind || !key) return;
         try {
             const d = this._getDeleted();
