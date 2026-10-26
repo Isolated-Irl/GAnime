@@ -337,6 +337,79 @@ const Sync = {
         }
     },
 
+    /* ---------- Profile cleanup (2026-10-26, duplicate bug) ----------
+       Two devices each create their own first profile, and every
+       first profile is auto-PRIMARY — so a merge can produce two
+       identical profiles that are BOTH primary, and addon sharing
+       then picks the first one (possibly the empty one). Fix, run
+       on every merged/pulled/pushed doc:
+       1. Drop an EMPTY duplicate: same name + same avatar as
+          another profile, with zero data of its own (no addons,
+          no watched, no library, no My List, no saved settings).
+          The profile WITH data always survives. A profile that
+          has any data is never dropped, even if its name matches.
+       2. Exactly one primary: if several remain primary, the
+          earliest-created (lowest numeric id suffix — ids are
+          'p' + Date.now()) keeps the badge, the rest lose it.
+          If none is primary, the first profile becomes primary. */
+    _profileDataSize(pid, doc) {
+        const s = (doc.byProfile && doc.byProfile[pid]) || {};
+        return ((s.addons || []).length)
+            + Object.keys(s.watched || {}).length
+            + Object.keys(s.locallib || {}).length
+            + ((s.mylist || []).length)
+            + Object.keys(s.settings || {}).length;
+    },
+
+    _normalizeProfiles(doc) {
+        if (!doc || !Array.isArray(doc.profiles)) return false;
+        let changed = false;
+        /* 1. Drop empty duplicates (same name + avatar). */
+        const groups = {};
+        doc.profiles.forEach(p => {
+            const key = String(p.name || '').trim() + '\n' + String(p.avatarName || '') + '\n' + String(p.avatarUrl || '');
+            (groups[key] = groups[key] || []).push(p);
+        });
+        const dropped = new Set();
+        Object.keys(groups).forEach(key => {
+            const group = groups[key];
+            if (group.length < 2) return;
+            const withData = group.filter(p => this._profileDataSize(p.id, doc) > 0);
+            if (!withData.length || withData.length === group.length) return;
+            group.forEach(p => {
+                if (withData.indexOf(p) === -1) dropped.add(p.id);
+            });
+        });
+        if (dropped.size) {
+            const keptByGroup = {};
+            doc.profiles = doc.profiles.filter(p => {
+                if (!dropped.has(p.id)) return true;
+                return false;
+            });
+            dropped.forEach(pid => { if (doc.byProfile) delete doc.byProfile[pid]; });
+            /* Active profile pointed at a dropped duplicate →
+               point it at the surviving profile with the same
+               name + avatar, else the first remaining profile. */
+            if (dropped.has(doc.activeProfileId)) {
+                const survivor = doc.profiles[0];
+                doc.activeProfileId = survivor ? survivor.id : '';
+            }
+            changed = true;
+        }
+        /* 2. Exactly one primary. */
+        const primaries = doc.profiles.filter(p => p.isPrimary);
+        if (primaries.length > 1) {
+            const num = p => { const n = parseInt(String(p.id || '').replace(/^p/, ''), 10); return isNaN(n) ? Infinity : n; };
+            let keeper = primaries[0];
+            primaries.forEach(p => { if (num(p) < num(keeper)) keeper = p; });
+            doc.profiles.forEach(p => { if (p.id !== keeper.id && p.isPrimary) { p.isPrimary = false; changed = true; } });
+        } else if (primaries.length === 0 && doc.profiles.length) {
+            doc.profiles[0].isPrimary = true;
+            changed = true;
+        }
+        return changed;
+    },
+
     /* ---------- Merge (both sides have data) ---------- */
     _mergeWatched(localW, cloudW) {
         const out = {};
@@ -406,6 +479,9 @@ const Sync = {
             merged.byProfile[pid] = ls;
         });
         merged._profilesTs = Math.max(local._profilesTs || 0, cloud._profilesTs || 0);
+        /* Duplicate-primary cleanup (2026-10-26): drop empty
+           same-name duplicates, keep exactly one primary. */
+        this._normalizeProfiles(merged);
         return merged;
     },
 
@@ -417,6 +493,7 @@ const Sync = {
         const token = await this._token();
         if (!token) return { status: 'no-token' };
         const doc = this.collectLocal();
+        if (this._normalizeProfiles(doc)) this.applyDoc(doc);
         try {
             await this._putCloud(auth.uid, token, doc);
             this._dirty = false;
@@ -442,6 +519,11 @@ const Sync = {
         const token = await this._token();
         if (!token) return { status: 'no-token', message: 'Could not get a fresh sign-in token. Try signing in again.' };
         const local = this.collectLocal();
+        /* Duplicate-primary cleanup also applies to the local doc
+           itself (covers the cloud-empty first-push case): a
+           cleaned local doc is written back locally first, so the
+           device and the cloud converge on the same profile list. */
+        if (this._normalizeProfiles(local)) this.applyDoc(local);
         const localHasProfiles = (local.profiles || []).length > 0;
         let cloud = null;
         try {
@@ -451,6 +533,8 @@ const Sync = {
             this._setLast('error', this.lastError);
             return { status: 'error', message: this.lastError };
         }
+        let cloudCleaned = false;
+        if (cloud) cloudCleaned = this._normalizeProfiles(cloud);
         try {
             if (!cloud) {
                 if (!localHasProfiles) {
@@ -465,6 +549,12 @@ const Sync = {
             }
             if (!localHasProfiles) {
                 this.applyDoc(cloud);
+                /* If the cloud doc itself had duplicates, push the
+                   cleaned copy straight back so every device
+                   converges now, not on the next manual sync. */
+                if (cloudCleaned) {
+                    try { await this._putCloud(auth.uid, token, this.collectLocal()); } catch (e) {}
+                }
                 this._dirty = false;
                 this.lastError = '';
                 this._setLast('synced', 'Downloaded from cloud');

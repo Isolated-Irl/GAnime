@@ -72,27 +72,21 @@ const App = {
             if (auth.signedIn || auth.isGuest) {
                 let savedScreen = '';
                 try { savedScreen = (JSON.parse(localStorage.getItem('ganime_last_route') || '{}') || {}).screen || ''; } catch (e) {}
-                if (savedScreen === 'profile-picker') { this.showProfilePicker(); return; }
                 if (savedScreen === 'add-profile') { this.openAddProfile(); return; }
-                /* Refresh-resume (2026-10-24): before this fix the
-                   boot ALWAYS stopped at the profile picker, so
-                   every refresh threw him back to the profile page
-                   even though his last profile + route were saved.
-                   If the stored active profile still exists, skip
-                   the picker and go straight into the shell —
-                   launchShell() restores his saved screen. The
-                   picker still shows when there is no stored active
-                   profile (fresh sign-in) or it was deleted. */
-                /* Repaired (2026-10-24): the strict id-match
-                   above could strand him on the picker when the
-                   stored id went stale (e.g. the delete-profile
-                   fallback writes 'primary', which matches no
-                   profile) — and from the picker, a profile tap
-                   now goes Home by his own rule, so a refresh
-                   from the Profile tab ended at Home. Resume
-                   into whatever profile the app itself resolves
-                   (stored id, else first profile) and repair the
-                   stored id to it. */
+                /* Landing rule (2026-10-26, refined same day):
+                   a FRESH tab landing (splash not yet played this
+                   tab) always goes to the profile picker page for
+                   a session (account or guest), never straight
+                   into Home, no matter how many profiles there
+                   are — and to the gate when there is no session.
+                   A REFRESH in the same tab is different: it
+                   resumes where you were (Home stays Home, picker
+                   stays picker), which is the 2026-10-24 resume
+                   behaviour he saw yesterday inside a profile.
+                   `seen` is the sessionStorage splash flag, set
+                   below before proceed() ever runs. */
+                if (!seen) { this.showProfilePicker(); return; }
+                if (savedScreen === 'profile-picker') { this.showProfilePicker(); return; }
                 const active = Storage.getActiveProfile();
                 if (active) {
                     Storage.setActiveProfileId(active.id);
@@ -333,8 +327,9 @@ const App = {
         this.applyTheme();
         document.getElementById('profilePickerScreen').classList.add('hidden');
         /* Tapping a profile = a fresh start at Home (2026-10-24),
-           NOT a resume of the page left before — resume-on-refresh
-           belongs to the boot path only (launchShell with no arg). */
+           NOT a resume of the page left before. (Fresh-tab boot
+           lands on the picker per the 2026-10-26 landing rule;
+           same-tab refresh resumes instead.) */
         this.launchShell(true);
     },
 
@@ -357,6 +352,7 @@ const App = {
             return;
         }
         try { localStorage.setItem('ganime_last_route', JSON.stringify({ screen: 'add-profile', at: Date.now() })); } catch (e) {}
+        this._editId = null;
         this._np = { name: '', avatarName: 'Bram', avatarUrl: '', usePrimaryAddons: false };
         document.getElementById('profilePickerScreen').classList.add('hidden');
         document.getElementById('authGateScreen').classList.add('hidden');
@@ -373,6 +369,13 @@ const App = {
         const root = document.getElementById('addProfileRoot');
         if (!root || !this._np) return;
         const np = this._np;
+        /* Edit mode (2026-10-26): the same full form, pre-filled,
+           with Save instead of Create. The Use Primary Addons row
+           only makes sense for a secondary profile: it is hidden
+           when creating the first profile (which becomes primary)
+           and when editing the primary profile itself. */
+        const editing = this._editId ? Storage.getProfile(this._editId) : null;
+        const showPrimaryToggle = editing ? !editing.isPrimary : (Storage.getProfiles().length > 0);
         const av = Config.AVATAR_CATALOG.find(a => a.name === np.avatarName) || Config.AVATAR_CATALOG[0];
         const previewAvatar = (np.avatarUrl && /^https?:\/\//i.test(String(np.avatarUrl).trim()))
             ? `<span class="profile-avatar lg-avatar"><img src="${this.esc(np.avatarUrl)}" alt=""></span>`
@@ -383,8 +386,8 @@ const App = {
         `).join('');
         root.innerHTML = `
             <div class="subpage-header">
-                ${Storage.getProfiles().length ? '<button class="back-btn" onclick="App.closeAddProfile()">←</button>' : ''}
-                <h2 class="subpage-title">Add Profile</h2>
+                ${Storage.getProfiles().length ? `<button class="back-btn" onclick="App.${editing ? 'closeEditProfilePage' : 'closeAddProfile'}()">←</button>` : ''}
+                <h2 class="subpage-title">${editing ? 'Edit Profile' : 'Add Profile'}</h2>
             </div>
             ${Storage.getProfiles().length ? '' : '<p class="gate-subtext" style="margin-bottom:14px">Create your first profile to start using GAnime.</p>'}
 
@@ -392,7 +395,7 @@ const App = {
                 ${previewAvatar}
                 <div class="np-preview-text">
                     <div class="np-preview-title">${this.esc(np.name.trim()) || 'New profile'}</div>
-                    <div class="setting-desc">New profile &nbsp;|&nbsp; Primary addons ${np.usePrimaryAddons ? 'on' : 'off'}</div>
+                    <div class="setting-desc">${showPrimaryToggle ? `Primary addons ${np.usePrimaryAddons ? 'on' : 'off'}` : 'Primary profile'}</div>
                     <div class="setting-desc">Avatar: ${np.avatarUrl ? 'Custom URL' : av.name}</div>
                 </div>
             </div>
@@ -400,6 +403,7 @@ const App = {
             <input type="text" class="app-input" placeholder="Profile name" value="${this.esc(np.name)}"
                 oninput="App.npSetName(this.value)">
 
+            ${showPrimaryToggle ? `
             <div class="settings-group">
                 <div class="setting-row">
                     <div class="setting-text">
@@ -411,7 +415,7 @@ const App = {
                         <span class="switch-track"></span>
                     </label>
                 </div>
-            </div>
+            </div>` : ''}
 
             <div class="np-block">
                 <div class="setting-label">Custom avatar URL</div>
@@ -426,7 +430,7 @@ const App = {
                 <div class="avatar-grid">${catalog}</div>
             </div>
 
-            <button class="btn-primary" onclick="App.createProfile()">Create Profile</button>
+            ${editing ? `<button class="btn-primary" onclick="App.saveProfilePage()">Save</button>` : `<button class="btn-primary" onclick="App.createProfile()">Create Profile</button>`}
         `;
     },
 
@@ -480,7 +484,7 @@ const App = {
                 ${this.profileAvatarHTML(p, 'small')}
                 <span class="manage-name">${this.esc(p.name)}${p.isPrimary ? ' · PRIMARY' : ''}</span>
                 <button class="btn-mini" onclick="App.editProfile('${p.id}')">Edit</button>
-                ${p.isPrimary ? '' : `<button class="btn-mini danger" onclick="App.deleteProfile('${p.id}')">Delete</button>`}
+                ${profiles.length > 1 ? `<button class="btn-mini danger" onclick="App.deleteProfile('${p.id}')">Delete</button>` : ''}
             </div>
         `).join('');
         this.openModal(`
@@ -490,71 +494,152 @@ const App = {
         `);
     },
 
-    /* QOL (2026-10-25): primary profile is now customisable —
-       the old Rename prompt only changed the name. Edit opens a
-       real editor: name + avatar picker (same catalog as Add
-       Profile). Applies to every row, primary included; Delete
-       stays off for primary. Picking a catalog avatar replaces
-       a custom URL avatar. */
+    /* Full-page Edit (2026-10-26): Edit no longer opens a small
+       name+avatar popup — it opens the SAME full form as Add
+       Profile (name, custom avatar URL, avatar picker, and the
+       Use Primary Addons row for secondary profiles), pre-filled,
+       with Save instead of Create. Back returns to Manage
+       Profiles, which lives on the picker screen. */
     editProfile(id) {
+        this.openEditProfilePage(id);
+    },
+
+    openEditProfilePage(id) {
         const profile = Storage.getProfile(id);
         if (!profile) return;
+        this.closeModal();
         this._editId = id;
-        this._editAvatar = profile.avatarName || Config.AVATAR_CATALOG[0].name;
-        const grid = Config.AVATAR_CATALOG.map(av => `
-            <button type="button" data-av="${av.name}" onclick="App.pickEditAvatar('${av.name}')"
-                style="width:52px;height:52px;border-radius:50%;border:${av.name === this._editAvatar ? '3px solid var(--accent)' : '3px solid transparent'};background:${av.bg};font-size:26px;cursor:pointer">${av.emoji}</button>`).join('');
-        this.openModal(`
-            <h3 class="modal-title">Edit Profile</h3>
-            <input type="text" id="editProfileName" class="app-input" value="${this.esc(profile.name)}" style="margin-bottom:14px">
-            <div id="editAvatarGrid" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">${grid}</div>
-            <div style="display:flex;gap:10px">
-                <button class="btn-primary" onclick="App.saveEditProfile()">Save</button>
-                <button class="btn-secondary" onclick="App.openManageProfilesModal()">Cancel</button>
-            </div>
-        `);
+        this._np = {
+            name: profile.name || '',
+            avatarName: profile.avatarName || Config.AVATAR_CATALOG[0].name,
+            avatarUrl: profile.avatarUrl || '',
+            usePrimaryAddons: !!profile.usePrimaryAddons
+        };
+        document.getElementById('profilePickerScreen').classList.add('hidden');
+        document.getElementById('authGateScreen').classList.add('hidden');
+        document.getElementById('appViewport').classList.add('hidden');
+        document.getElementById('floatingNav').classList.add('hidden');
+        document.getElementById('addProfileScreen').classList.remove('hidden');
+        this.renderAddProfile();
     },
 
-    pickEditAvatar(name) {
-        this._editAvatar = name;
-        const grid = document.getElementById('editAvatarGrid');
-        if (!grid) return;
-        grid.querySelectorAll('[data-av]').forEach(b => {
-            b.style.border = b.dataset.av === name ? '3px solid var(--accent)' : '3px solid transparent';
-        });
-    },
-
-    saveEditProfile() {
-        const profile = Storage.getProfile(this._editId);
-        const input = document.getElementById('editProfileName');
-        const name = input ? input.value.trim() : '';
-        if (!profile || !name) return;
-        const profiles = Storage.getProfiles();
-        const target = profiles.find(p => p.id === this._editId);
-        if (!target) return;
-        target.name = name;
-        target.avatarName = this._editAvatar || target.avatarName;
-        target.avatarUrl = '';
-        Storage.saveProfiles(profiles);
-        this.renderProfiles();
-        this.renderTopBar();
+    closeEditProfilePage() {
+        this._editId = null;
+        document.getElementById('addProfileScreen').classList.add('hidden');
+        document.getElementById('profilePickerScreen').classList.remove('hidden');
         this.openManageProfilesModal();
     },
 
+    saveProfilePage() {
+        const profile = Storage.getProfile(this._editId);
+        if (!profile || !this._np) return;
+        const profiles = Storage.getProfiles();
+        const target = profiles.find(p => p.id === this._editId);
+        if (!target) return;
+        const name = (this._np.name || '').trim();
+        if (name) target.name = name;
+        target.avatarName = this._np.avatarName || target.avatarName;
+        target.avatarUrl = this._np.avatarUrl || '';
+        /* A primary profile never shares addons (its row is
+           hidden), so its flag is forced off; a secondary
+           follows the toggle. Other fields (id, isPrimary,
+           color, pin, background) are preserved untouched. */
+        target.usePrimaryAddons = target.isPrimary ? false : !!this._np.usePrimaryAddons;
+        Storage.saveProfiles(profiles);
+        this.renderProfiles();
+        this.renderTopBar();
+        this.closeEditProfilePage();
+    },
+
+    /* Delete rules (2026-10-26, his corrections):
+       - Only 1 profile: no Delete button at all (the Manage
+         modal hides it) — the last profile cannot be deleted.
+       - 2+ profiles, deleting the primary: the first remaining
+         profile becomes primary. If any remaining profile shares
+         the primary's addons, a warning popup comes FIRST: on
+         confirm, the primary's addon list is copied to the new
+         primary (or unioned with its own live list if it was not
+         sharing, so nothing is lost), and only then is the old
+         primary deleted. A sharing profile's own stored key is
+         stale by definition (its writes went to the primary),
+         so it is never unioned back in. */
     deleteProfile(id) {
+        const profiles = Storage.getProfiles();
+        if (profiles.length <= 1) return;
+        const target = profiles.find(p => p.id === id);
+        if (!target) return;
+        const remaining = profiles.filter(p => p.id !== id);
+        if (target.isPrimary && remaining.some(p => p.usePrimaryAddons)) {
+            const sharers = remaining.filter(p => p.usePrimaryAddons).map(p => p.name).join(', ');
+            const next = remaining[0];
+            this.openModal(`
+                <h3 class="modal-title">Delete the primary profile?</h3>
+                <p class="text-secondary">${this.esc(sharers)} use${remaining.filter(p => p.usePrimaryAddons).length > 1 ? '' : 's'} the primary profile's addons. Deleting it will copy that addon list to ${this.esc(next.name)}, which will become the new primary — nothing will be lost.</p>
+                <div style="display:flex;gap:10px">
+                    <button class="btn-secondary" style="color:#f87171; border-color:rgba(248,113,113,0.3)" onclick="App.deleteProfileConfirmed('${id}')">Delete anyway</button>
+                    <button class="btn-secondary" onclick="App.openManageProfilesModal()">Cancel</button>
+                </div>
+            `);
+            return;
+        }
         if (!confirm('Delete this profile? Its settings will be removed.')) return;
-        Storage.saveProfiles(Storage.getProfiles().filter(p => p.id !== id));
+        this._doDeleteProfile(id);
+    },
+
+    deleteProfileConfirmed(id) {
+        this._doDeleteProfile(id);
+    },
+
+    _doDeleteProfile(id) {
+        const profiles = Storage.getProfiles();
+        const target = profiles.find(p => p.id === id);
+        if (!target) return;
+        const remaining = profiles.filter(p => p.id !== id);
+        const wasPrimary = !!target.isPrimary;
+        const wasActive = Storage.getActiveProfileId() === id;
+        /* Read the primary's addon list BEFORE deleting anything.
+           For a primary, getAddonOwnerId returns itself, so this
+           is its own live list. For a non-primary it is unused. */
+        let primaryAddons = null;
+        if (wasPrimary) {
+            try { primaryAddons = Storage.getAddons(id) || []; } catch (e) { primaryAddons = []; }
+        }
+        /* Promote first remaining to primary (flag + sharing off)
+           BEFORE writing its addon list, so saveAddons resolves
+           to its own key, not the old primary's. */
+        if (wasPrimary && remaining.length) {
+            const next = remaining[0];
+            const wasSharing = !!next.usePrimaryAddons;
+            next.isPrimary = true;
+            next.usePrimaryAddons = false;
+            Storage.saveProfiles(remaining);
+            if (primaryAddons && primaryAddons.length) {
+                let own = [];
+                if (!wasSharing) {
+                    try { own = JSON.parse(localStorage.getItem('ganime_addons_' + next.id) || '[]') || []; } catch (e) { own = []; }
+                }
+                const seen = new Set(own.map(a => a.manifestUrl || a.id));
+                const merged = own.slice();
+                primaryAddons.forEach(a => {
+                    const key = a.manifestUrl || a.id;
+                    if (key && !seen.has(key)) { seen.add(key); merged.push(a); }
+                });
+                Storage.saveAddons(merged, next.id);
+            }
+        } else {
+            Storage.saveProfiles(remaining);
+        }
         for (const key of ['ganime_settings_', 'ganime_addons_', 'ganime_watched_', 'ganime_locallib_', 'ganime_tracking_', 'ganime_mylist_']) {
             localStorage.removeItem(key + id);
         }
-        if (Storage.getActiveProfileId() === id) {
-            /* You deleted the profile you were using — choosing
-               again is the honest outcome, not a silent switch
-               to somebody else's profile. */
+        if (wasActive) {
+            /* You deleted the profile you were using — back to
+               the picker (the landing rule's home base), not a
+               silent switch to somebody else's profile. */
             Storage.clearActiveProfileId();
             this.closeModal();
-            const remaining = Storage.getProfiles();
-            if (!remaining.length) { this.openAddProfile(); return; }
+            const left = Storage.getProfiles();
+            if (!left.length) { this.openAddProfile(); return; }
             this.showProfilePicker();
             return;
         }
@@ -618,8 +703,11 @@ const App = {
         const profile = Storage.getActiveProfile();
         if (!profile) { box.innerHTML = ''; return; }
         if (profiles.length <= 1) {
+            /* Home avatar rule (2026-10-26): with a single profile
+               there is no switcher to open, so the chip is a plain
+               button straight to the picker page — no dropdown. */
             box.classList.remove('open');
-            box.innerHTML = `<div class="tb-chip static">${this.profileAvatarHTML(profile, 'tb-avatar')}<span class="tb-chip-name">${this.esc(profile.name)}</span></div>`;
+            box.innerHTML = `<button class="tb-chip" title="Profiles" onclick="App.returnToProfilePicker()">${this.profileAvatarHTML(profile, 'tb-avatar')}<span class="tb-chip-name">${this.esc(profile.name)}</span></button>`;
             return;
         }
         const others = profiles.filter(p => p.id !== profile.id);
