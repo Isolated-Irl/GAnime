@@ -1573,8 +1573,15 @@ const App = {
         const inList = !!(localEntry && localEntry.status);
         const dots = heroes.map((h, i) =>
             `<button class="hero-dot ${i === this.heroIndex ? 'active' : ''}" onclick="App.heroGo(${i})"></button>`).join('');
-        const coverStyle = t.cover
-            ? `background-image:url('${this._safeImgUrl(t.cover)}'); background-size:cover; background-position:center 22%`
+        /* Mobile hero (2026-10-27, v3): the wide banner crops badly
+           in a tall phone frame, so mobile uses the portrait poster
+           instead; desktop keeps the banner. Falls back to the
+           banner when a title has no poster. */
+        const isMobileHero = typeof window !== 'undefined' && !!window.matchMedia &&
+            window.matchMedia('(max-width: 640px)').matches;
+        const heroBg = (isMobileHero && t.poster) ? t.poster : t.cover;
+        const coverStyle = heroBg
+            ? `background-image:url('${this._safeImgUrl(heroBg)}'); background-size:cover; background-position:center 22%`
             : `background:linear-gradient(160deg, hsl(${t.hue} 62% 36%), hsl(${t.hue + 50} 70% 14%) 70%)`;
         /* Hero per Fix 3 ("our new design"): chips row (score ·
            format · status · year), big title, second-language

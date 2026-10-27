@@ -1193,20 +1193,11 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     .cw-source-name { font-size: 17px; }
     .cw-source-sub { font-size: 13px; }
     .stream-tabs { flex-wrap: wrap; }
-    /* Homepage hero, mobile (2026-10-27, sample v2): true full-bleed
-       frame (negates the 11px screen-pad sides, beats card mode),
-       genre first, meta row below it, Details centred, no title
-       text, no synopsis, no Play/My List — the banner art carries
-       the name. Scoped to #homeHero so the details hero is untouched. */
-    body.hero-card-mode #homeHero .hero, #homeHero .hero { margin: 0 -11px; border-radius: 0; border: none; min-height: 430px; }
-    #homeHero .hero-content { display: flex; flex-direction: column; }
-    #homeHero .hero-title, #homeHero .hero-title-sub, #homeHero .hero-synopsis { display: none; }
-    #homeHero .hero-genres { order: 1; }
-    #homeHero .hero-chips { order: 2; }
-    #homeHero .hero-actions { order: 3; justify-content: center; }
-    #homeHero .hero-actions .btn-play, #homeHero .hero-actions .btn-mylist { display: none; }
-    #homeHero .hero-actions .btn-details { background: var(--accent); border-color: transparent; }
-    #homeHero .hero-dots { order: 4; justify-content: center; }
+    /* Homepage hero, mobile (2026-10-27, v3): v2's full-bleed +
+       hidden-title layout is reverted — the card box, title,
+       synopsis and buttons are back exactly as before. Only the ART
+       changes on mobile (poster instead of banner, picked in
+       renderHero). Avatar pill + smaller bottom bar below stay. */
     /* Top-bar avatar pill (2026-10-27): the name hides on mobile but
        the chip kept its wide right padding, pushing the avatar left
        in its pill — symmetric padding centres it again. */
