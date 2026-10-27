@@ -1221,7 +1221,7 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 .lib-sort-row.on { background: var(--focus-bg); color: var(--text-primary); }
 /* Poster episode badge: local-library cards only (posterCardHTML
    stays shared — the badge is passed in, never a global poster change). */
-.lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: transparent; color: #fff; border: none; border-radius: 999px; padding: 2px 6px; font-size: 10px; font-weight: 700; line-height: 1.5; text-shadow: 0 1px 3px rgba(0,0,0,.65); z-index: 2; }
+.lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: #2a5cff; color: #fff; border: none; border-radius: 999px; padding: 2px 8px; font-size: 13.5px; font-weight: 900; line-height: 1.4; box-shadow: 0 2px 8px rgba(42,92,255,.45); z-index: 2; }
 /* Mobile floating status button: hidden on desktop, replaces the
    status pills row on phones. Sits above the bottom pill nav. */
 .lib-fab-wrap { display: none; }
@@ -1235,8 +1235,8 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
     .lib-sources { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
     .lib-sources::-webkit-scrollbar { display: none; }
     .lib-sources { gap: 6px; }
-    .lib-sources .ftab { padding: 7px 12px; font-size: 12px; }
-    .lib-sort-icon { margin-left: 0; width: 32px; height: 32px; }
+    .lib-sources .ftab { padding: 8px 14px; font-size: 13px; }
+    .lib-sort-icon { margin-left: 0; width: 34px; height: 34px; }
     .lib-status-row { display: none; }
     .lib-fab-wrap { display: block; }
 }
