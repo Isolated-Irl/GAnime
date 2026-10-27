@@ -1319,3 +1319,12 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
     .lib-status-row { display: none; }
     .lib-fab-wrap { display: flex; flex-direction: column; align-items: flex-end; }
 }
+
+/* Streams mobile layout (2026-10-27): un-crush the header and let
+   the addon tabs slide instead of wrapping. Desktop untouched. */
+@media (max-width: 640px) {
+    .streams-head { flex-wrap: wrap; }
+    .streams-head-tools { flex-basis: 100%; margin-left: 0; }
+    .stream-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .stream-tabs::-webkit-scrollbar { display: none; }
+}

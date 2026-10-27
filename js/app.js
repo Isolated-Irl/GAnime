@@ -3551,7 +3551,7 @@ const App = {
                     ${tab('addons', 'Addon')}
                     ${tab('playback', 'Playback')}
                     ${tab('about', 'About & Credits')}
-                    <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>
+                    <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}</div>
                 </aside>
                 <div class="settings-panel">${panel}</div>
             </div>`;
@@ -3576,7 +3576,7 @@ const App = {
                 ${row('playback', '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>', 'Playback', 'Player, subtitles, and auto-play')}
                 ${row('about', '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>', 'About & Credits', 'Version, credits, and links')}
             </div>
-            <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>`;
+            <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}</div>`;
     },
 
     /* --- row helpers (read current settings each render) ---
@@ -3763,6 +3763,10 @@ const App = {
                 ${card('movi-player', 'Modern WebCodecs/WASM playback engine supporting HLS, MPEG-DASH, and direct file playback.')}
                 ${card('movi-player by MrUjjwalG', 'Creator of movi-player — the player engine behind GAnime, credited here and in the GitHub About. Without a player, the app would be just a fancy showcase.')} 
                 ${card('Built with Muse & Gemini', 'Designed and built by Isolated in a three-way collaboration — Muse (build & verification) and Gemini (analysis & benchmarking).')}
+            </div>
+            <div class="credit-card wide">
+                <div class="credit-title">♥ NuvioWeb Inspiration</div>
+                <div class="credit-body">UI and player design inspired by NuvioWeb — modern glass styling, floating control pills, and a sleek dark aesthetic.</div>
             </div>`;
     },
 
