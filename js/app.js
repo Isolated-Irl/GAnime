@@ -1160,7 +1160,7 @@ const App = {
         }
         if (screenId === 'screen-library') {
             this.librarySourceTab = 'Local';
-            this.localLibFilter = 'Watching';
+            this.localLibFilter = 'ALL';
         }
         this.navigate(screenId);
     },
@@ -4146,7 +4146,7 @@ const App = {
     },
 
     librarySourceTab: 'Local',
-    localLibFilter: 'Watching',
+    localLibFilter: 'ALL',
     librarySortMenuOpen: false,
     localLibFabOpen: false,
 
