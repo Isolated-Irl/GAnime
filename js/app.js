@@ -4214,6 +4214,34 @@ const App = {
             return t;
         };
         const shown = ids.filter(id => lib[id].status && (filter === 'ALL' || lib[id].status === filter));
+        /* Local sort (2026-10-27 fix): the sort button used to do
+           nothing here — only tracker lists were sorted. Mirror
+           sortLibraryEntries with local fields (updatedAt exists on
+           every entry; addedAt/completedAt/score do not, so Added
+           falls back to updatedAt, Completed puts finished titles
+           first, and score sorts keep order when no score exists). */
+        const sortMode = this.librarySort || 'UPDATED_DESC';
+        const localSort = (a, b) => {
+            const ea = lib[a], eb = lib[b];
+            const ma = ea.meta || {}, mb = eb.meta || {};
+            const seenA = ((watchedMap[a] || {}).eps || []).length, seenB = ((watchedMap[b] || {}).eps || []).length;
+            const progA = ma.total ? seenA / ma.total : 0, progB = mb.total ? seenB / mb.total : 0;
+            switch (sortMode) {
+                case 'COMPLETED_DESC': {
+                    const ca = ea.status === 'Completed' ? 1 : 0, cb = eb.status === 'Completed' ? 1 : 0;
+                    return (cb - ca) || ((eb.updatedAt || 0) - (ea.updatedAt || 0));
+                }
+                case 'ADDED_DESC': return (eb.updatedAt || 0) - (ea.updatedAt || 0);
+                case 'PROGRESS_DESC': return (progB - progA) || ((eb.updatedAt || 0) - (ea.updatedAt || 0));
+                case 'SCORE_DESC':
+                case 'AVG_SCORE_DESC': return (parseFloat(mb.scorePct) || parseFloat(mb.score) || 0) - (parseFloat(ma.scorePct) || parseFloat(ma.score) || 0);
+                case 'YEAR_DESC': return (parseInt(mb.year, 10) || 0) - (parseInt(ma.year, 10) || 0);
+                case 'TITLE_ASC': return (ma.title || '').localeCompare(mb.title || '');
+                case 'UPDATED_DESC':
+                default: return (eb.updatedAt || 0) - (ea.updatedAt || 0);
+            }
+        };
+        shown.sort(localSort);
         const cards = shown.map(id => {
             const t = entryTitle(id);
             const total = t.eps || 0;
@@ -4254,7 +4282,7 @@ const App = {
         const sortMenu = this.librarySortMenuOpen ? `<div class="lib-sort-menu">${this.LIBRARY_SORTS.map(p => `<button class="lib-sort-row ${this.librarySort === p[0] ? 'on' : ''}" onclick="App.setLibrarySort('${p[0]}')">${p[1]}</button>`).join('')}</div>` : '';
         const headerHTML = `
             <div class="lib-head"><h2 class="screen-title">Library</h2></div>
-            <div class="stream-tabs lib-sources">${srcBtn('Local', localLabel)}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}<button class="lib-sort-icon" onclick="App.toggleLibrarySortMenu()" title="Sort">${this.sortIconSVG()}</button>${sortMenu}</div>`;
+            <div class="stream-tabs lib-sources">${srcBtn('Local', localLabel)}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}<button class="lib-sort-icon" onclick="App.toggleLibrarySortMenu()" title="Sort">${this.sortIconSVG()}</button></div>${sortMenu}`;
         if (source === 'Local') {
             controls.innerHTML = headerHTML;
             grid.innerHTML = this.libraryLocalHTML();

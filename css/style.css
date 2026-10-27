@@ -1214,9 +1214,9 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 
 /* --- Library layout pass (2026-10-27): sort icon in source row,
    Cloud/Local label, mobile floating status button, poster badge --- */
-.lib-sources { position: relative; }
+#libraryControls { position: relative; }
 .lib-sort-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; margin-left: auto; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; cursor: pointer; }
-.lib-sort-menu { position: absolute; right: 0; top: calc(100% + 6px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 6px; width: 200px; box-shadow: 0 12px 30px rgba(0,0,0,.6); z-index: 160; }
+.lib-sort-menu { position: absolute; right: 0; top: 100%; margin-top: 6px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 6px; width: 200px; box-shadow: 0 12px 30px rgba(0,0,0,.6); z-index: 160; }
 .lib-sort-row { display: block; width: 100%; text-align: left; padding: 9px 12px; border: none; background: transparent; color: var(--text-secondary); border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .lib-sort-row.on { background: var(--focus-bg); color: var(--text-primary); }
 /* Poster episode badge: local-library cards only (posterCardHTML
@@ -1238,5 +1238,5 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
     .lib-sources .ftab { padding: 8px 14px; font-size: 13px; }
     .lib-sort-icon { margin-left: 0; width: 34px; height: 34px; }
     .lib-status-row { display: none; }
-    .lib-fab-wrap { display: block; }
+    .lib-fab-wrap { display: flex; flex-direction: column; align-items: flex-end; }
 }
