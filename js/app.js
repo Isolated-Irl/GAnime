@@ -4061,8 +4061,9 @@ const App = {
                 const res = await fetch(relay + '/exchange/mal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }) });
                 const data = await res.json();
                 if (!res.ok || !data.access_token) throw new Error((data && (data.error || data.message)) || 'MAL exchange failed');
-                // MAL's name lookup needs a relay addition later; the
-                // token alone already marks the card connected.
+                // @name fills in on the first relay list load
+                // (/mal/me); the token alone already marks the card
+                // connected.
                 Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: null });
             }
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
@@ -4314,7 +4315,11 @@ const App = {
             const items = (parsed && parsed.data) || [];
             if (!Array.isArray(items)) throw new Error('That JSON has no data list — copy the terminal output whole.');
             const listsCache = await Trackers.malParseListJson(items);
-            Storage.saveMalConn({ clientId, user: { id: username, name: username, avatar: '' }, listsCache });
+            /* Merge, don't replace: a paste must never wipe a
+               one-tap token, or the relay load would break until
+               the next login. */
+            const prev = Storage.getMalConn();
+            Storage.saveMalConn({ ...prev, clientId, user: { id: username, name: username, avatar: '' }, listsCache });
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
             this.closeModal();
             if (this.settingsPage === 'tracking') this.renderSettings();
@@ -4362,6 +4367,45 @@ const App = {
         ['YEAR_DESC', 'Release Year']
     ],
 
+    /* MAL lists through the relay (no terminal paste): the one-tap
+       token rides to the worker, which asks MAL's API and hands the
+       list back. 401 once -> refresh the token via the relay and
+       retry once. Any other failure returns null, and the caller
+       falls back to the last pasted cache, then the paste message. */
+    async _fetchMalListsViaRelay() {
+        const relay = (Config.OAUTH && Config.OAUTH.RELAY_URL) || '';
+        const mal = Storage.getMalConn();
+        if (!relay || !mal || !mal.accessToken) return null;
+        const post = async (path, body) => {
+            try {
+                const res = await fetch(relay + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                const data = await res.json().catch(() => ({}));
+                return { ok: res.ok, status: res.status, data };
+            } catch (e) { return { ok: false, status: 0, data: {} }; }
+        };
+        let token = mal.accessToken;
+        let r = await post('/mal/list', { access_token: token });
+        if (!r.ok && r.status === 401 && mal.refreshToken) {
+            const ref = await post('/mal/refresh', { refresh_token: mal.refreshToken });
+            if (ref.ok && ref.data.access_token) {
+                token = ref.data.access_token;
+                Storage.saveMalConn({ ...mal, accessToken: token, refreshToken: ref.data.refresh_token || mal.refreshToken, expiresAt: ref.data.expires_in ? Date.now() + ref.data.expires_in * 1000 : 0 });
+                r = await post('/mal/list', { access_token: token });
+            }
+        }
+        if (!r.ok || !Array.isArray(r.data.data)) return null;
+        const lists = await Trackers.malParseListJson(r.data.data);
+        /* Fill in @name on the first relay load (login alone can't:
+           MAL's name lookup needs this relay). Re-read first so a
+           refresh-save above isn't clobbered. */
+        const fresh = Storage.getMalConn() || mal;
+        if (!fresh.user) {
+            const me = await post('/mal/me', { access_token: token });
+            if (me.ok && me.data.name) Storage.saveMalConn({ ...fresh, user: { id: me.data.id || '', name: me.data.name, avatar: (me.data.picture || '') } });
+        }
+        return lists;
+    },
+
     async fetchTrackingLists(force) {
         const active = this.activeTrackerName();
         if (active === 'Local') return null;
@@ -4384,7 +4428,16 @@ const App = {
                     if (sk && sk.accessToken) lists = await Trackers.simklLists(sk.clientId, sk.accessToken);
                 } else if (active === 'MyAnimeList') {
                     const mal = Storage.getMalConn();
-                    if (mal && mal.listsCache) lists = mal.listsCache;
+                    if (mal && mal.accessToken) {
+                        /* One-tap token: load fresh through the relay,
+                           no paste needed. A failed relay load keeps
+                           the last good cache instead of erroring. */
+                        lists = await this._fetchMalListsViaRelay();
+                        if (lists) {
+                            const fresh = Storage.getMalConn();
+                            Storage.saveMalConn({ ...(fresh || mal), listsCache: lists });
+                        } else if (mal.listsCache) lists = mal.listsCache;
+                    } else if (mal && mal.listsCache) lists = mal.listsCache;
                 }
                 if (lists) {
                     /* One batched cache write, not one per entry:
