@@ -2786,7 +2786,7 @@ const App = {
                     <span class="te-brand mal">MAL</span>
                     <span class="te-name">MyAnimeList</span>
                     <span class="te-readonly">Read-only</span>
-                    <span class="te-conn">${malConn && malConn.user ? '@' + this.esc(malConn.user.name) : 'Not Connected'}</span>
+                    <span class="te-conn">${malConn && malConn.user ? '@' + this.esc(malConn.user.name) : (malConn && malConn.accessToken ? 'Connected' : 'Not Connected')}</span>
                     ${t.malId ? `<button class="btn-mini" onclick="window.open('https://myanimelist.net/anime/${t.malId}', '_blank')">Open ↗</button>` : ''}
                 </div>
                 <div class="te-note">MAL sync is read-only in this app (OAuth write token required). Track and sync your progress via AniList or Simkl.</div>
@@ -2797,7 +2797,7 @@ const App = {
                     <span class="te-name">Simkl</span>
                     <span class="te-conn">${skOk ? 'Connected' : 'Not Connected'}</span>
                     <button class="btn-mini" onclick="window.open('https://simkl.com/', '_blank')">Open ↗</button>
-                    ${skOk ? '' : '<button class="btn-mini" onclick="App.closeModal(); App.openSimklConnect()">Connect</button>'}
+                    ${skOk ? '' : '<button class="btn-mini" onclick="App.closeModal(); App.connectSimklOneClick()">Connect</button>'}
                 </div>
                 ${skOk ? `
                 <div class="te-grid">
@@ -3802,8 +3802,8 @@ const App = {
             ${this.backHeader('Tracking')}
             <div class="tracker-stat-row">
                 ${statCard('AniList', !!(al && al.accessToken), al && al.user ? '@' + al.user.name : '', (al && al.accessToken) ? "App.openTrackerManage('anilist')" : 'App.connectAnilistOneClick()')}
-                ${statCard('MyAnimeList', !!(mal && (mal.accessToken || mal.listsCache)), mal && mal.user ? '@' + mal.user.name : '', (mal && (mal.accessToken || mal.listsCache)) ? "App.openTrackerManage('mal')" : 'App.openMalConnect()')}
-                ${statCard('Simkl', !!(sk && sk.accessToken), sk && sk.user ? '@' + sk.user.name : '', (sk && sk.accessToken) ? "App.openTrackerManage('simkl')" : 'App.openSimklConnect()')}
+                ${statCard('MyAnimeList', !!(mal && (mal.accessToken || mal.listsCache)), mal && mal.user ? '@' + mal.user.name : '', (mal && (mal.accessToken || mal.listsCache)) ? "App.openTrackerManage('mal')" : 'App.connectMalOneClick()')}
+                ${statCard('Simkl', !!(sk && sk.accessToken), sk && sk.user ? '@' + sk.user.name : '', (sk && sk.accessToken) ? "App.openTrackerManage('simkl')" : 'App.connectSimklOneClick()')}
             </div>
             <div class="section-label">CONTINUE WATCHING DATA SOURCE</div>
             <div class="cw-source-row">
@@ -3823,8 +3823,8 @@ const App = {
     openTrackerManage(provider) {
         const conns = {
             anilist: { name: 'AniList', conn: Storage.getAnilistConn() || {}, disc: 'App.anilistDisconnect()', recon: 'App.connectAnilistOneClick()' },
-            mal: { name: 'MyAnimeList', conn: Storage.getMalConn() || {}, disc: 'App.malDisconnect()', recon: 'App.openMalConnect()' },
-            simkl: { name: 'Simkl', conn: Storage.getSimklConn() || {}, disc: 'App.simklDisconnect()', recon: 'App.openSimklConnect()' }
+            mal: { name: 'MyAnimeList', conn: Storage.getMalConn() || {}, disc: 'App.malDisconnect()', recon: 'App.connectMalOneClick()' },
+            simkl: { name: 'Simkl', conn: Storage.getSimklConn() || {}, disc: 'App.simklDisconnect()', recon: 'App.connectSimklOneClick()' }
         };
         const p = conns[provider];
         if (!p) return;
@@ -3867,6 +3867,19 @@ const App = {
        automatically — true zero-typing. On file:// the PIN-page
        paste flow below is used instead. */
     async handleOAuthCallback() {
+        /* Simkl / MAL one-tap return: ?provider=simkl|mal&code=&state=.
+           The code is single-use, so strip the query first, then
+           swap it for tokens through the relay. */
+        try {
+            const qp = this._oauthCallbackParams(window.location.search || '');
+            if (qp) {
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', window.location.pathname);
+                }
+                await this._finishOAuthCodeFlow(qp.provider, qp.code, qp.state);
+                return;
+            }
+        } catch (e) { /* a bad code return just means: use the old flows */ }
         try {
             const hash = (window.location && window.location.hash) || '';
             if (!hash.includes('access_token=')) return;
@@ -3922,6 +3935,113 @@ const App = {
             <button class="btn-secondary" onclick="App.closeModal()">Cancel</button>
             <p class="text-secondary" style="margin-top:12px">The token lasts a year and never leaves this device except to AniList itself.</p>
         `);
+    },
+
+    /* --- Simkl / MAL one-tap (2026-10-27) ---
+       Same idea as AniList one-tap, but with an authorization
+       code: the app redirects to the provider, the provider
+       returns ?provider=&code=&state=, and handleOAuthCallback
+       swaps the code for tokens through the relay. On file://
+       the old flows stay (the registered redirect is pages.dev,
+       so a local file can never receive the return). */
+    _oauthRedirect(provider) {
+        return 'https://ganime.pages.dev/?provider=' + provider;
+    },
+
+    _oauthCallbackParams(search) {
+        if (!search) return null;
+        const p = new URLSearchParams(search);
+        const provider = p.get('provider');
+        const code = p.get('code');
+        if ((provider !== 'simkl' && provider !== 'mal') || !code) return null;
+        return { provider, code, state: p.get('state') || '' };
+    },
+
+    _randomOAuthString(len) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        let out = '';
+        try {
+            if (window.crypto && window.crypto.getRandomValues) {
+                const buf = new Uint8Array(len);
+                window.crypto.getRandomValues(buf);
+                for (let i = 0; i < len; i++) out += chars.charAt(buf[i] % chars.length);
+                return out;
+            }
+        } catch (e) { /* fall through to Math.random */ }
+        for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+        return out;
+    },
+
+    _simklAuthorizeUrl(clientId, redirectUri, state) {
+        return 'https://simkl.com/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&state=' + encodeURIComponent(state);
+    },
+
+    _malAuthorizeUrl(clientId, redirectUri, verifier, state) {
+        // MAL allows only the plain PKCE method: challenge == verifier.
+        return 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&state=' + encodeURIComponent(state) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&code_challenge=' + encodeURIComponent(verifier) + '&code_challenge_method=plain';
+    },
+
+    connectSimklOneClick() {
+        const cid = (Config.OAUTH && Config.OAUTH.SIMKL_CLIENT_ID) || (Storage.getSimklConn() || {}).clientId || '';
+        if (!cid) { this.openSimklConnect(); return; }
+        if (window.location.protocol === 'file:') { this.openSimklConnect(); return; }
+        const state = this._randomOAuthString(32);
+        try { window.sessionStorage.setItem('ganime_oauth_simkl', JSON.stringify({ state })); } catch (e) { /* private mode: state check skipped */ }
+        window.location.href = this._simklAuthorizeUrl(cid, this._oauthRedirect('simkl'), state);
+    },
+
+    connectMalOneClick() {
+        const cid = (Config.OAUTH && Config.OAUTH.MAL_CLIENT_ID) || (Storage.getMalConn() || {}).clientId || '';
+        if (!cid) { this.openMalConnect(); return; }
+        if (window.location.protocol === 'file:') { this.openMalConnect(); return; }
+        const state = this._randomOAuthString(32);
+        const verifier = this._randomOAuthString(128);
+        try { window.sessionStorage.setItem('ganime_oauth_mal', JSON.stringify({ state, verifier })); } catch (e) { /* private mode: state check skipped */ }
+        window.location.href = this._malAuthorizeUrl(cid, this._oauthRedirect('mal'), verifier, state);
+    },
+
+    async _finishOAuthCodeFlow(provider, code, state) {
+        const stored = (window.sessionStorage && window.sessionStorage.getItem('ganime_oauth_' + provider)) || '';
+        let saved = null;
+        try { saved = stored ? JSON.parse(stored) : null; } catch (e) { saved = null; }
+        if (window.sessionStorage) window.sessionStorage.removeItem('ganime_oauth_' + provider);
+        if (!saved || saved.state !== state) return; // state mismatch: refuse quietly
+        const relay = (Config.OAUTH && Config.OAUTH.RELAY_URL) || '';
+        const redirectUri = this._oauthRedirect(provider);
+        if (!relay) return;
+        try {
+            if (provider === 'simkl') {
+                const cid = (Config.OAUTH && Config.OAUTH.SIMKL_CLIENT_ID) || '';
+                const res = await fetch(relay + '/exchange/simkl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, redirect_uri: redirectUri }) });
+                const data = await res.json();
+                if (!res.ok || !data.access_token) throw new Error((data && (data.error_description || data.error)) || 'Simkl exchange failed');
+                const user = await Trackers.simklViewer(cid, data.access_token);
+                Storage.saveSimklConn({ clientId: cid, accessToken: data.access_token, user });
+            } else {
+                const cid = (Config.OAUTH && Config.OAUTH.MAL_CLIENT_ID) || '';
+                const verifier = saved.verifier || '';
+                const res = await fetch(relay + '/exchange/mal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }) });
+                const data = await res.json();
+                if (!res.ok || !data.access_token) throw new Error((data && (data.error || data.message)) || 'MAL exchange failed');
+                // MAL's name lookup needs a relay addition later; the
+                // token alone already marks the card connected.
+                Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: null });
+            }
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.settingsPage = 'tracking';
+            this._pendingOAuthLanding = true;
+            this.fetchTrackingLists(true);
+            if (this.shellLaunched && this.currentScreen !== 'screen-profile') this.navigate('screen-profile');
+            if (this.shellLaunched && this.currentScreen === 'screen-profile' && typeof this.renderSettings === 'function') this.renderSettings();
+        } catch (e) {
+            /* Show the failure: a silent miss here would look like
+               "nothing happened" on return, hiding a relay/config bug. */
+            try {
+                if (typeof this.openModal === 'function') {
+                    this.openModal(`<h3 class="modal-title">${provider === 'simkl' ? 'Simkl' : 'MyAnimeList'} login did not finish</h3><p class="text-secondary">${this.esc(e.message || 'Exchange failed')}</p><button class="btn-secondary" onclick="App.closeModal()">Close</button>`);
+                }
+            } catch (e2) { /* boot too early for a modal: stay silent */ }
+        }
     },
 
     openAnilistConnect() {
@@ -4445,7 +4565,7 @@ const App = {
             : active === 'Simkl' ? Storage.getSimklConn()
             : active === 'MyAnimeList' ? Storage.getMalConn() : null;
         if (active !== source || !conn) {
-            const opener = source === 'AniList' ? 'App.connectAnilistOneClick()' : source === 'Simkl' ? 'App.openSimklConnect()' : 'App.openMalConnect()';
+            const opener = source === 'AniList' ? 'App.connectAnilistOneClick()' : source === 'Simkl' ? 'App.connectSimklOneClick()' : 'App.connectMalOneClick()';
             controls.innerHTML = headerHTML;
             grid.innerHTML = `
                 <div class="provider-card">
@@ -4461,7 +4581,7 @@ const App = {
             return `<button class="ftab ${this.libraryFilter === s.key ? 'active' : ''}" onclick="App.setLibraryFilter('${s.key}')">${s.label}${this.trackingLists ? ' · ' + count : ''}</button>`;
         }).join('');
         controls.innerHTML = headerHTML + `
-            <p class="text-secondary" style="margin-bottom:12px">${active} · @${this.esc(conn.user ? conn.user.name : '')}</p>
+            <p class="text-secondary" style="margin-bottom:12px">${active}${conn.user && conn.user.name ? ' · @' + this.esc(conn.user.name) : ''}</p>
             <div class="stream-tabs" style="align-items:center">${chips}</div>`;
         if (this.trackingError) {
             grid.innerHTML = `<p class="text-secondary">${this.esc(this.trackingError)}</p><button class="btn-secondary" onclick="App.retryLibrary()">Retry</button>`;
@@ -4615,8 +4735,8 @@ const App = {
 
     connectProvider(name) {
         if (name === 'AniList') { this.connectAnilistOneClick(); return; }
-        if (name === 'Simkl') { this.openSimklConnect(); return; }
-        if (name === 'MyAnimeList') { this.openMalConnect(); return; }
+        if (name === 'Simkl') { this.connectSimklOneClick(); return; }
+        if (name === 'MyAnimeList') { this.connectMalOneClick(); return; }
     },
 
     /* ---------- Addons manager (real app blueprint) ---------- */

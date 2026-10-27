@@ -9,13 +9,16 @@ const Config = {
 
     /* GAnime's own OAuth client IDs, baked in so connecting a
        tracker never asks the user to type developer details.
-       The AniList one is Isolated's client (54686, redirect =
-       ganime.pages.dev). Simkl's goes here once his Simkl
-       app exists; until then the connect modal remembers the
-       ID he pastes once. */
+       AniList (54686), Simkl and MAL are Isolated's official
+       apps, all redirecting to ganime.pages.dev with a
+       ?provider= tag. Simkl/MAL token swaps run through the
+       Cloudflare relay (RELAY_URL) so no secret ever ships
+       in this public code. */
     OAUTH: {
         ANILIST_CLIENT_ID: '54686',
-        SIMKL_CLIENT_ID: ''
+        SIMKL_CLIENT_ID: '49dfaf44602c7464026066ff52eb2e4fb797f26a136a2107c250e5d9f73f8a7b',
+        MAL_CLIENT_ID: 'f15fbfc461e31b1674c0747f5e680f01',
+        RELAY_URL: 'https://ganime-relay.gp237372.workers.dev'
     },
 
     /* Firebase Auth (Spark, REST, Phase 1 login only).
