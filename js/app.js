@@ -3871,6 +3871,23 @@ const App = {
            The code is single-use, so strip the query first, then
            swap it for tokens through the relay. */
         try {
+            /* Provider refused the login (e.g. Simkl's "PKCE S256
+               is required"): show it instead of silently landing
+               back on the profile page with the error in the URL. */
+            const sp = new URLSearchParams(window.location.search || '');
+            const errProvider = sp.get('provider');
+            if ((errProvider === 'simkl' || errProvider === 'mal') && sp.get('error')) {
+                const msg = sp.get('error_description') || sp.get('error') || 'Login failed';
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', window.location.pathname);
+                }
+                try {
+                    if (typeof this.openModal === 'function') {
+                        this.openModal(`<h3 class="modal-title">${errProvider === 'simkl' ? 'Simkl' : 'MyAnimeList'} login did not finish</h3><p class="text-secondary">${this.esc(msg)}</p><button class="btn-secondary" onclick="App.closeModal()">Close</button>`);
+                    }
+                } catch (e2) { /* boot too early for a modal: stay silent */ }
+                return;
+            }
             const qp = this._oauthCallbackParams(window.location.search || '');
             if (qp) {
                 if (window.history && window.history.replaceState) {
@@ -3972,8 +3989,25 @@ const App = {
         return out;
     },
 
-    _simklAuthorizeUrl(clientId, redirectUri, state) {
-        return 'https://simkl.com/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&state=' + encodeURIComponent(state);
+    _simklAuthorizeUrl(clientId, redirectUri, state, challenge) {
+        // Simkl REQUIRES PKCE S256 (live error 2026-10-27:
+        // "PKCE S256 is required") — without the challenge it
+        // bounces the login before showing its own page.
+        return 'https://simkl.com/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&state=' + encodeURIComponent(state) + '&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=S256';
+    },
+
+    /* PKCE S256 challenge: base64url(SHA-256(verifier)). Returns
+       null when no WebCrypto is available (caller falls back). */
+    async _pkceS256Challenge(verifier) {
+        try {
+            const subtle = (window.crypto && window.crypto.subtle) || (typeof crypto !== 'undefined' && crypto.subtle) || null;
+            if (!subtle) return null;
+            const digest = await subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+            const bytes = new Uint8Array(digest);
+            let bin = '';
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        } catch (e) { return null; }
     },
 
     _malAuthorizeUrl(clientId, redirectUri, verifier, state) {
@@ -3981,13 +4015,16 @@ const App = {
         return 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&state=' + encodeURIComponent(state) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&code_challenge=' + encodeURIComponent(verifier) + '&code_challenge_method=plain';
     },
 
-    connectSimklOneClick() {
+    async connectSimklOneClick() {
         const cid = (Config.OAUTH && Config.OAUTH.SIMKL_CLIENT_ID) || (Storage.getSimklConn() || {}).clientId || '';
         if (!cid) { this.openSimklConnect(); return; }
         if (window.location.protocol === 'file:') { this.openSimklConnect(); return; }
         const state = this._randomOAuthString(32);
-        try { window.sessionStorage.setItem('ganime_oauth_simkl', JSON.stringify({ state })); } catch (e) { /* private mode: state check skipped */ }
-        window.location.href = this._simklAuthorizeUrl(cid, this._oauthRedirect('simkl'), state);
+        const verifier = this._randomOAuthString(128);
+        const challenge = await this._pkceS256Challenge(verifier);
+        if (!challenge) { this.openSimklConnect(); return; }
+        try { window.sessionStorage.setItem('ganime_oauth_simkl', JSON.stringify({ state, verifier })); } catch (e) { /* private mode: state check skipped */ }
+        window.location.href = this._simklAuthorizeUrl(cid, this._oauthRedirect('simkl'), state, challenge);
     },
 
     connectMalOneClick() {
@@ -4012,7 +4049,8 @@ const App = {
         try {
             if (provider === 'simkl') {
                 const cid = (Config.OAUTH && Config.OAUTH.SIMKL_CLIENT_ID) || '';
-                const res = await fetch(relay + '/exchange/simkl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, redirect_uri: redirectUri }) });
+                const verifier = saved.verifier || '';
+                const res = await fetch(relay + '/exchange/simkl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }) });
                 const data = await res.json();
                 if (!res.ok || !data.access_token) throw new Error((data && (data.error_description || data.error)) || 'Simkl exchange failed');
                 const user = await Trackers.simklViewer(cid, data.access_token);
