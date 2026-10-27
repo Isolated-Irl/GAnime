@@ -4367,6 +4367,10 @@ const App = {
         if (active === 'Local') return null;
         if (!force && this.trackingLists && this.trackingListsProvider === active && Date.now() - this.trackingListsAt < 60000) return this.trackingLists;
         if (this.trackingFetch) return this.trackingFetch;
+        /* A fetch that's actually starting clears the previous
+           provider's error (placed after the guards, so a cached
+           return or an in-flight fetch never wipes anything). */
+        this.trackingError = '';
         this.trackingFetch = (async () => {
             try {
                 let lists = null;
@@ -4383,7 +4387,14 @@ const App = {
                     if (mal && mal.listsCache) lists = mal.listsCache;
                 }
                 if (lists) {
-                    Object.values(lists).forEach(g => (g.entries || []).forEach(e => this.cacheTitles([e.media])));
+                    /* One batched cache write, not one per entry:
+                       cacheTitles re-serializes the whole title cache
+                       and hits sessionStorage on every call, so 500
+                       entries meant 500 synchronous writes (seconds
+                       of frozen UI on a phone). Same merge, one save. */
+                    const allMedia = [];
+                    Object.values(lists).forEach(g => (g.entries || []).forEach(e => { if (e && e.media) allMedia.push(e.media); }));
+                    this.cacheTitles(allMedia);
                     this.trackingLists = lists;
                     this.trackingListsProvider = active;
                     this.trackingListsAt = Date.now();
@@ -4499,6 +4510,10 @@ const App = {
 
     setLibrarySource(src) {
         this.librarySourceTab = src;
+        /* Errors belong to the previous tab: without this reset, a
+           MAL error would keep showing on the Simkl tab (and every
+           other tab) until Retry cleared it. */
+        this.trackingError = '';
         if (src !== 'Local') {
             /* Same partial-overwrite bug as setCwSource — fixed
                the same way (merge one key, keep everything else). */
