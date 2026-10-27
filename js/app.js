@@ -4388,6 +4388,15 @@ const App = {
                     this.trackingListsProvider = active;
                     this.trackingListsAt = Date.now();
                     this.trackingError = '';
+                } else if (!this.trackingError) {
+                    /* Never resolve silently: Library's skeleton
+                       branch re-fetches on every null resolve, so a
+                       silent null loops forever and starves the tab
+                       (one-tap MAL has a token but no pasted
+                       listsCache, so it hit this every time). */
+                    this.trackingError = active === 'MyAnimeList'
+                        ? 'MAL lists load from the paste sync in Settings → Tracking (MAL does not answer browsers).'
+                        : 'Could not load your ' + active + ' lists.';
                 }
                 return lists;
             } catch (e) {
@@ -4397,7 +4406,16 @@ const App = {
                 this.trackingFetch = null;
             }
         })();
-        return this.trackingFetch;
+        /* The finally above runs BEFORE this assignment lands when
+           the fetch completes synchronously (MAL no-cache path), so
+           the stale promise would otherwise survive forever and
+           every later fetch would return it instead of refetching
+           (Retry would loop again). Clear on settle, identity-
+           checked, so the next fetch always runs fresh. */
+        const currentFetch = this.trackingFetch;
+        const clearFetch = () => { if (this.trackingFetch === currentFetch) this.trackingFetch = null; };
+        currentFetch.then(clearFetch, clearFetch);
+        return currentFetch;
     },
 
     /* Push local watched progress up to AniList (fire-and-forget;
