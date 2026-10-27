@@ -657,50 +657,57 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     color: var(--on-accent); /* on-accent switches per preset */
 }
 .addon-list { display: flex; flex-direction: column; gap: 10px; }
-.addon-row {
-    display: flex; gap: 12px; align-items: stretch;
+/* Addon cards (2026-10-27): stacked reference-style cards — logo +
+   name + toggle on top, monochrome action icons, pills, full
+   wrapping description. No fixed-width columns, so nothing can
+   run off the right edge on mobile. */
+.addon-card {
     background: var(--bg-card); border: 1px solid var(--border-subtle);
-    border-radius: 14px; padding: 14px;
+    border-radius: 16px; padding: 16px;
 }
-.addon-order { display: flex; flex-direction: column; gap: 6px; }
-.addon-order .btn-mini:disabled { opacity: 0.3; cursor: default; }
+.addon-top { display: flex; gap: 12px; align-items: flex-start; }
 .addon-logo {
-    width: 42px; height: 42px; flex: none; border-radius: 10px; overflow: hidden;
+    width: 52px; height: 52px; flex: none; border-radius: 14px; overflow: hidden;
     background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
-    font-size: 19px; font-weight: 800; color: var(--text-secondary);
+    font-size: 22px; font-weight: 800; color: var(--text-secondary);
 }
 .addon-logo img { width: 100%; height: 100%; object-fit: contain; }
-.addon-info { flex: 1; min-width: 0; }
-.addon-name { font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.addon-card .addon-name { flex: 1; min-width: 0; font-size: 17px; font-weight: 800; }
 .version-chip {
     font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
     background: var(--focus-bg); color: var(--text-secondary);
     border-radius: var(--radius-pill); padding: 2px 8px;
 }
-.addon-desc {
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+.addon-acts { display: flex; gap: 8px; margin: 14px 0 12px; }
+.addon-icobtn {
+    width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center;
+    background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px;
+    color: var(--text-primary); font-size: 16px; cursor: pointer;
 }
+.addon-icobtn:disabled { opacity: 0.3; cursor: default; }
+.addon-icobtn svg { display: block; }
+.addon-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.addon-pill {
+    background: var(--focus-bg); color: var(--text-secondary); border-radius: var(--radius-pill);
+    padding: 6px 12px; font-size: 12px; font-weight: 700; text-transform: capitalize;
+}
+.addon-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 .addon-url {
-    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+    font-size: 11px; color: var(--text-muted); margin-top: 6px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.addon-res { font-size: 11px; color: var(--accent); font-weight: 700; margin-top: 3px; text-transform: capitalize; }
-/* Addon enable/disable tweaks (2026-10-24): toggle centred over
-   its own Enabled/Disabled word, action buttons in one compact
-   row underneath instead of a tall stack. */
-/* Button alignment (2026-10-24): the actions column is a FIXED
-   width on every card, and everything in it is RIGHT-aligned —
-   so the enable toggle sits directly ABOVE the Remove button,
-   and Configure / Refresh / Remove land at the exact same spot
-   on every card, no matter how long that card's description is. */
-.addon-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; flex: none; width: 280px; }
-.addon-state { font-size: 11px; font-weight: 700; color: var(--text-muted); }
-.addon-state.on { color: #22c55e; }
-.addon-btnrow { display: flex; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; width: 100%; margin-top: auto; }
-@media (max-width: 640px) {
-    .addon-row { flex-wrap: wrap; }
-    .addon-actions { width: 100%; }
+
+/* --- Settings menu (mobile, 2026-10-27) --- */
+.settings-menu-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; overflow: hidden; }
+.settings-menu-row { display: flex; gap: 14px; align-items: center; padding: 16px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
+.settings-menu-row:last-child { border-bottom: none; }
+.settings-menu-ico {
+    width: 48px; height: 48px; flex: none; border-radius: 14px;
+    background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; color: var(--text-primary);
 }
+.settings-menu-text { flex: 1; min-width: 0; }
+.settings-menu-text b { font-size: 16px; display: block; }
+.settings-menu-text span { font-size: 13px; color: var(--text-muted); line-height: 1.4; display: block; }
 
 /* --- Select Stream screen --- */
 .streams-head { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; }
@@ -1177,6 +1184,14 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     .ep-big { width: 84vw; }
     .te-grid { grid-template-columns: 1fr; }
     .cw-source-row { grid-template-columns: 1fr; }
+    /* Tracking cards bigger on mobile (2026-10-27): fill the blank space. */
+    .tracker-stat-card { padding: 20px; }
+    .tsc-name { font-size: 18px; }
+    .tsc-state { font-size: 13.5px; }
+    .tracker-stat-card .btn-mini { padding: 9px 16px; font-size: 13px; }
+    .cw-source-card { padding: 18px 20px; }
+    .cw-source-name { font-size: 17px; }
+    .cw-source-sub { font-size: 13px; }
     .stream-tabs { flex-wrap: wrap; }
 }
 

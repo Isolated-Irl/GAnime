@@ -1156,6 +1156,8 @@ const App = {
         if (screenId === 'screen-profile') {
             this.settingsPage = 'account';
             this.settingsParent = 'account';
+            /* Mobile: Settings opens on the menu, not on Account. */
+            this.mobileSettings = null;
             this.renderSettings();
         }
         if (screenId === 'screen-library') {
@@ -3397,12 +3399,22 @@ const App = {
             this.settingsPage = page;
             this.settingsParent = parent || this.settingsParent || 'account';
         }
+        /* Mobile: a tapped menu row (or deep link) opens that section. */
+        this.mobileSettings = page;
         this.renderSettings();
         window.scrollTo(0, 0);
     },
 
     backToSettingsTab() {
         this.settingsPage = this.settingsParent || 'account';
+        /* Mobile: back from a sub-page lands on its parent section. */
+        this.mobileSettings = this.settingsParent || 'account';
+        this.renderSettings();
+    },
+
+    /* Mobile: back from a section lands on the Settings menu. */
+    closeMobileSettings() {
+        this.mobileSettings = null;
         this.renderSettings();
     },
 
@@ -3410,6 +3422,13 @@ const App = {
         const root = document.getElementById('settingsRoot');
         if (!root) return;
         if (!this.settingsPage) this.settingsPage = 'account';
+        /* Mobile menu: Settings opens on a tappable section list.
+           Tapping a row calls openSettingsPage, which sets
+           mobileSettings and re-renders into the section view below. */
+        if (this._isMobileSettings() && this.mobileSettings == null) {
+            root.innerHTML = this.settingsMenuHTML();
+            return;
+        }
         let panel = '';
         switch (this.settingsPage) {
             case 'account':       panel = this.pageAccountTab(); break;
@@ -3424,6 +3443,12 @@ const App = {
         }
         const tab = (page, label) => `
             <button class="side-tab ${this.settingsPage === page ? 'active' : ''}" onclick="App.openSettingsPage('${page}')">${label}</button>`;
+        /* Mobile section view: panel only, no sidebar — the section's
+           own back arrow (see backHeader) returns to the menu. */
+        if (this._isMobileSettings() && this.mobileSettings != null) {
+            root.innerHTML = `<div class="settings-panel">${panel}</div>`;
+            return;
+        }
         root.innerHTML = `
             <div class="settings-layout">
                 <aside class="settings-sidebar">
@@ -3436,6 +3461,27 @@ const App = {
                     ${tab('about', 'About & Credits')}
                 </aside>
                 <div class="settings-panel">${panel}</div>
+            </div>`;
+    },
+
+    /* Mobile Settings menu (2026-10-27): icon + title + description
+       rows, one per section. Tapping a row opens that section. */
+    settingsMenuHTML() {
+        const ico = (inner) => `<span class="settings-menu-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg></span>`;
+        const row = (page, icon, title, desc) => `
+            <div class="settings-menu-row" onclick="App.openSettingsPage('${page}')">
+                ${ico(icon)}
+                <span class="settings-menu-text"><b>${title}</b><span>${desc}</span></span>
+            </div>`;
+        return `
+            <div class="panel-title">Settings</div>
+            <div class="settings-menu-card">
+                ${row('account', '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>', 'Account', 'Profile, sign in, cloud sync')}
+                ${row('tracking', '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>', 'Tracking', 'AniList, MyAnimeList, Simkl')}
+                ${row('layout', '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>', 'Layout', 'Theme, hero, rails, detail pages')}
+                ${row('addons', '<path d="M8 3h8v4h4v8h-4v4H8v-4H4V7h4z"/>', 'Addon', 'Install and manage addons')}
+                ${row('playback', '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>', 'Playback', 'Player, subtitles, and auto-play')}
+                ${row('about', '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>', 'About & Credits', 'Version, credits, and links')}
             </div>`;
     },
 
@@ -3493,8 +3539,24 @@ const App = {
             </div>`;
     },
 
+    /* Mobile Settings breakpoint (matches the <=900px sidebar collapse). */
+    _isMobileSettings() {
+        return typeof window !== 'undefined' && !!window.matchMedia &&
+            window.matchMedia('(max-width: 900px)').matches;
+    },
+
     backHeader(title) {
         const topTabs = ['account', 'tracking', 'layout', 'addons', 'playback', 'about'];
+        /* Mobile section view: tab pages get a back arrow to the menu
+           instead of a bare title (desktop keeps the bare title, since
+           its sidebar tabs are the navigation). */
+        if (topTabs.includes(this.settingsPage) && this._isMobileSettings() && this.mobileSettings != null) {
+            return `
+            <div class="subpage-header">
+                <button class="back-btn" onclick="App.closeMobileSettings()">←</button>
+                <h2 class="subpage-title">${title}</h2>
+            </div>`;
+        }
         if (topTabs.includes(this.settingsPage)) {
             return `<div class="panel-title">${title}</div>`;
         }
@@ -4503,31 +4565,32 @@ const App = {
         this.detectAddonConfig(addons);
         const ownerId = Storage.getAddonOwnerId();
         const sharing = ownerId !== Storage.getActiveProfileId();
+        /* Monochrome trash icon (2026-10-27): the dustbin is an
+           outline SVG in currentColor — never a coloured emoji. */
+        const trashIco = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
         const rows = addons.length ? addons.map((a, i) => `
-            <div class="addon-row">
-                <div class="addon-order">
-                    <button class="btn-mini" ${i === 0 ? 'disabled' : ''} onclick="App.moveAddon(${i},-1)">↑</button>
-                    <button class="btn-mini" ${i === addons.length - 1 ? 'disabled' : ''} onclick="App.moveAddon(${i},1)">↓</button>
-                </div>
-                <div class="addon-logo">${(a.logo && /^https?:\/\//i.test(a.logo)) ? `<img src="${this.esc(a.logo)}" alt="">` : `<span>${this.esc(a.name.charAt(0))}</span>`}</div>
-                <div class="addon-info">
+            <div class="addon-card">
+                <div class="addon-top">
+                    <div class="addon-logo">${(a.logo && /^https?:\/\//i.test(a.logo)) ? `<img src="${this.esc(a.logo)}" alt="">` : `<span>${this.esc(a.name.charAt(0))}</span>`}</div>
                     <div class="addon-name">${this.esc(a.name)} ${a.version ? `<span class="version-chip">v${this.esc(a.version)}</span>` : ''}</div>
-                    ${a.description ? `<div class="setting-desc addon-desc">${this.esc(a.description)}</div>` : ''}
-                    <div class="addon-url">${this.esc(this.maskAddonUrl(a.manifestUrl))}</div>
-                    <div class="addon-res">${this.esc((a.resources || []).join(' · ')) || 'no resources'}</div>
-                </div>
-                <div class="addon-actions">
                     <label class="switch" title="${a.enabled ? 'Enabled' : 'Disabled'}">
                         <input type="checkbox" ${a.enabled ? 'checked' : ''} onchange="App.setAddonEnabled(${i}, this.checked, this)">
                         <span class="switch-track"></span>
                     </label>
-                    <span class="addon-state ${a.enabled ? 'on' : ''}">${a.enabled ? 'Enabled' : 'Disabled'}</span>
-                    <div class="addon-btnrow">
-                        ${a.configurable ? `<button class="btn-mini" onclick="App.openAddonConfigure(${i})">⚙ Configure</button>` : ''}
-                        <button class="btn-mini" onclick="App.refreshAddon(${i})">Refresh</button>
-                        <button class="btn-mini" onclick="App.removeAddon(${i})">Remove</button>
-                    </div>
                 </div>
+                <div class="addon-acts">
+                    <button class="addon-icobtn" title="Move up" ${i === 0 ? 'disabled' : ''} onclick="App.moveAddon(${i},-1)">↑</button>
+                    <button class="addon-icobtn" title="Move down" ${i === addons.length - 1 ? 'disabled' : ''} onclick="App.moveAddon(${i},1)">↓</button>
+                    <button class="addon-icobtn" title="Refresh" onclick="App.refreshAddon(${i})">↻</button>
+                    ${a.configurable ? `<button class="addon-icobtn" title="Configure" onclick="App.openAddonConfigure(${i})">⚙</button>` : ''}
+                    <button class="addon-icobtn" title="Remove" onclick="App.removeAddon(${i})">${trashIco}</button>
+                </div>
+                <div class="addon-pills">
+                    <span class="addon-pill">${a.enabled ? 'Active' : 'Disabled'}</span>
+                    ${(a.resources || []).map(r => `<span class="addon-pill">${this.esc(r)}</span>`).join('')}
+                </div>
+                ${a.description ? `<div class="addon-desc">${this.esc(a.description)}</div>` : ''}
+                <div class="addon-url">${this.esc(this.maskAddonUrl(a.manifestUrl))}</div>
             </div>`).join('')
             : '';
         return `
@@ -4580,19 +4643,16 @@ const App = {
             addons[index].enabled = checked;
             Storage.saveAddons(addons);
         }
-        /* Instant feedback (2026-10-24): the Enabled/Disabled word
-           is rendered text, so before this fix it only changed on
-           the next full render (page switch) — the toggle pill
-           flipped natively, the word lagged behind. Update it in
+        /* Instant feedback (2026-10-24, card layout 2026-10-27): the
+           state pill is rendered text, so before this fix it only
+           changed on the next full render (page switch) — the toggle
+           flipped natively, the pill lagged behind. Update it in
            place now. No full re-render here on purpose: it would
            wipe a half-typed install URL in the form above. */
         if (el && el.closest) {
-            const row = el.closest('.addon-row');
-            const word = row && row.querySelector('.addon-state');
-            if (word) {
-                word.textContent = checked ? 'Enabled' : 'Disabled';
-                word.classList.toggle('on', checked);
-            }
+            const card = el.closest('.addon-card');
+            const pill = card && card.querySelector('.addon-pills .addon-pill');
+            if (pill) pill.textContent = checked ? 'Active' : 'Disabled';
             const label = el.closest('.switch');
             if (label) label.title = checked ? 'Enabled' : 'Disabled';
         }
