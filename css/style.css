@@ -1214,8 +1214,11 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     #homeHero .hero-dots { order: 6; justify-content: center; }
     /* Home hero tall again (2026-10-27): v4's shorter card was a
        side effect, never asked for — restore the old tall frame,
-       v4 order kept, content bottom-aligned so the name stays low. */
-    #homeHero { min-height: 600px; }
+       v4 order kept, content bottom-aligned so the name stays low.
+       NOTE: #homeHero is only the wrapper — the height belongs on
+       the .hero card inside it, or the card stays short and the
+       wrapper leaves a black gap (bug seen live 2026-10-27 16:41). */
+    #homeHero .hero { min-height: 600px; }
     /* Details hero, mobile (2026-10-27, v2): clean banner on top,
        everything below on dark — replaces the shrink row (v1).
        Desktop details untouched. */
