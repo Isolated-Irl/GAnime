@@ -1307,7 +1307,7 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 .lib-fab-wrap { position: fixed; right: 16px; bottom: 100px; z-index: 140; }
 .lib-fab-stack { display: none; flex-direction: column; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
 .lib-fab-stack.open { display: flex; }
-.lib-fab { display: inline-flex; align-items: center; gap: 8px; background: #2a5cff; color: #fff; border: none; border-radius: 16px; padding: 13px 18px; font-size: 14px; font-weight: 800; box-shadow: 0 8px 22px rgba(42,92,255,.5); cursor: pointer; }
+.lib-fab { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #fff; border: none; border-radius: 16px; padding: 13px 18px; font-size: 14px; font-weight: 800; box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 50%, transparent); cursor: pointer; }
 .lib-fab-mini { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 6px 16px rgba(0,0,0,.55); white-space: nowrap; cursor: pointer; }
 .lib-fab-mini.on { background: #e5484d; border-color: #e5484d; color: #fff; }
 @media (max-width: 640px) {

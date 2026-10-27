@@ -3553,6 +3553,7 @@ const App = {
                     ${tab('addons', 'Addon')}
                     ${tab('playback', 'Playback')}
                     ${tab('about', 'About & Credits')}
+                    <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>
                 </aside>
                 <div class="settings-panel">${panel}</div>
             </div>`;
@@ -3576,7 +3577,8 @@ const App = {
                 ${row('addons', '<path d="M8 3h8v4h4v8h-4v4H8v-4H4V7h4z"/>', 'Addon', 'Install and manage addons')}
                 ${row('playback', '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>', 'Playback', 'Player, subtitles, and auto-play')}
                 ${row('about', '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>', 'About & Credits', 'Version, credits, and links')}
-            </div>`;
+            </div>
+            <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>`;
     },
 
     /* --- row helpers (read current settings each render) ---
@@ -3694,8 +3696,6 @@ const App = {
                 ${this.sInfo('Cloud Sync', this.esc(syncText))}
                 <div style="height:10px"></div>
                 <button class="btn-white" onclick="App.syncNowManual()">Sync Now</button>
-                <div style="height:8px"></div>
-                <div style="font-size:12px; opacity:0.75; line-height:1.5">Syncs automatically — profiles, watched, library, settings and addons to your account, within seconds of any change and when you leave the app. Tracking logins (AniList / Simkl / MAL) and key-bearing addon URLs do NOT sync — reconnect those once per device. If sync fails, first create the Firestore database and set its rules (one-time console steps — ask Nounou for them).</div>
             </div><div style="height:14px"></div>`;
         }
         return `
@@ -3716,8 +3716,7 @@ const App = {
                the only way to clear this device. */
               isGuest
                 ? `<button class="btn-secondary" style="color:#f87171; border-color:rgba(248,113,113,0.3)" onclick="App.wipeDeviceData()">Reset All Local Data</button>`
-                : ''}
-            <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}<br>Based on NuvioWeb</div>`;
+                : ''}`;
     },
 
     /* Manual Phase 2 sync from Settings → Account. Merges this
@@ -3766,12 +3765,7 @@ const App = {
                 ${card('movi-player', 'Modern WebCodecs/WASM playback engine supporting HLS, MPEG-DASH, and direct file playback.')}
                 ${card('movi-player by MrUjjwalG', 'Creator of movi-player — the player engine behind GAnime, credited here and in the GitHub About. Without a player, the app would be just a fancy showcase.')} 
                 ${card('Built with Muse & Gemini', 'Designed and built by Isolated in a three-way collaboration — Muse (build & verification) and Gemini (analysis & benchmarking).')}
-            </div>
-            <div class="credit-card wide">
-                <div class="credit-title">♥ NuvioWeb Inspiration</div>
-                <div class="credit-body">UI and player design inspired by NuvioWeb — modern glass styling, floating control pills, and a sleek dark aesthetic.</div>
-            </div>
-            <div class="settings-footer">Made with ♥ by Isolated<br>${Config.APP_VERSION}</div>`;
+            </div>`;
     },
 
     setCwSource(value) {
