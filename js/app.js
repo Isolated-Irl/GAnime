@@ -1597,8 +1597,8 @@ const App = {
                     <div class="hero-synopsis justified">${this.esc(t.synopsis)}</div>
                     <div class="hero-actions">
                         <button class="btn-play" onclick="App.playTitle('${t.id}')">▶ Play</button>
-                        <button class="btn-ghost" onclick="App.toggleMyList('${t.id}')">${inList ? '✓ ' + localEntry.status : '+ My List'}</button>
-                        <button class="btn-ghost" onclick="App.openDetails('${t.id}')">Details</button>
+                        <button class="btn-ghost btn-mylist" onclick="App.toggleMyList('${t.id}')">${inList ? '✓ ' + localEntry.status : '+ My List'}</button>
+                        <button class="btn-ghost btn-details" onclick="App.openDetails('${t.id}')">Details</button>
                     </div>
                     <div class="hero-dots">${dots}</div>
                 </div>
