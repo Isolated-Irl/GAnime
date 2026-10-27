@@ -4140,9 +4140,28 @@ const App = {
         this.renderLibrary();
     },
 
-    /* Three-bar sort icon (same mark as the mobile status button). */
+    /* Three-bar sort icon, used only on the sort button in the
+       source row (the status button now shows the status icon). */
     sortIconSVG() {
         return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="15" y2="12"/><line x1="4" y1="18" x2="10" y2="18"/><path d="M17 4l3 3-3 3" fill="none"/></svg>`;
+    },
+
+    /* Per-status icons, AniList-sheet style (outline, currentColor):
+       the floating button shows the CURRENT status's icon, and every
+       status row/pill shows its own — so switching shows the
+       respective logo. The sort icon stays only on the sort button. */
+    statusIconSVG(key) {
+        const open = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+        const icons = {
+            ALL: `${open}<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`,
+            Watching: `${open}<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>`,
+            Completed: `${open}<circle cx="12" cy="12" r="10"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>`,
+            'Plan to Watch': `${open}<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+            'On Hold': `${open}<circle cx="12" cy="12" r="10"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="14" y1="8" x2="14" y2="16"/></svg>`,
+            Dropped: `${open}<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>`,
+            Rewatching: `${open}<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
+        };
+        return icons[key] || icons.ALL;
     },
 
     librarySourceTab: 'Local',
@@ -4185,7 +4204,7 @@ const App = {
         const chips = ['ALL'].concat(statuses).map(k => {
             const label = k === 'ALL' ? 'All' : k;
             const count = k === 'ALL' ? ids.filter(id => lib[id].status).length : counts[k];
-            return `<button class="ftab ${filter === k ? 'active' : ''}" onclick="App.setLocalLibFilter('${k}')">${label} · ${count}</button>`;
+            return `<button class="ftab ${filter === k ? 'active' : ''}" onclick="App.setLocalLibFilter('${k}')">${this.statusIconSVG(k)}${label} · ${count}</button>`;
         }).join('');
         const watchedMap = Storage.getWatched();
         const entryTitle = id => {
@@ -4213,10 +4232,10 @@ const App = {
         const fabMinis = ['ALL'].concat(statuses).map(k => {
             const label = k === 'ALL' ? 'All' : k;
             const count = k === 'ALL' ? ids.filter(id => lib[id].status).length : counts[k];
-            return `<button class="lib-fab-mini ${filter === k ? 'on' : ''}" onclick="App.setLocalLibFilter('${k}')">${label} · ${count}</button>`;
+            return `<button class="lib-fab-mini ${filter === k ? 'on' : ''}" onclick="App.setLocalLibFilter('${k}')">${this.statusIconSVG(k)}${label} · ${count}</button>`;
         }).join('');
         const fabLabel = filter === 'ALL' ? 'All' : filter;
-        const fabHTML = `<div class="lib-fab-wrap"><div class="lib-fab-stack ${this.localLibFabOpen ? 'open' : ''}">${fabMinis}</div><button class="lib-fab" onclick="App.toggleLocalLibFab()">${this.sortIconSVG()} ${fabLabel}</button></div>`;
+        const fabHTML = `<div class="lib-fab-wrap"><div class="lib-fab-stack ${this.localLibFabOpen ? 'open' : ''}">${fabMinis}</div><button class="lib-fab" onclick="App.toggleLocalLibFab()">${this.statusIconSVG(filter)} ${fabLabel}</button></div>`;
         return `
             <div class="stream-tabs lib-status-row" style="margin-bottom:14px">${chips}</div>
             ${cards ? `<div class="search-grid">${cards}</div>` : `<p class="text-secondary">${filter === 'ALL' ? 'Nothing in your Local library yet — Add to Library on any title puts it here.' : 'No titles with this status yet.'}</p>`}

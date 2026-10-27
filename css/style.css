@@ -1221,7 +1221,7 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 .lib-sort-row.on { background: var(--focus-bg); color: var(--text-primary); }
 /* Poster episode badge: local-library cards only (posterCardHTML
    stays shared — the badge is passed in, never a global poster change). */
-.lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: #2a5cff; color: #fff; border: none; border-radius: 999px; padding: 2px 8px; font-size: 13.5px; font-weight: 900; line-height: 1.4; box-shadow: 0 2px 8px rgba(42,92,255,.45); z-index: 2; }
+.lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: rgba(16,18,24,0.87); color: #fff; border: none; border-radius: 999px; padding: 2px 8px; font-size: 13.5px; font-weight: 900; line-height: 1.4; z-index: 2; }
 /* Mobile floating status button: hidden on desktop, replaces the
    status pills row on phones. Sits above the bottom pill nav. */
 .lib-fab-wrap { display: none; }
@@ -1229,7 +1229,7 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 .lib-fab-stack { display: none; flex-direction: column; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
 .lib-fab-stack.open { display: flex; }
 .lib-fab { display: inline-flex; align-items: center; gap: 8px; background: #2a5cff; color: #fff; border: none; border-radius: 16px; padding: 13px 18px; font-size: 14px; font-weight: 800; box-shadow: 0 8px 22px rgba(42,92,255,.5); cursor: pointer; }
-.lib-fab-mini { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 6px 16px rgba(0,0,0,.55); white-space: nowrap; cursor: pointer; }
+.lib-fab-mini { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 6px 16px rgba(0,0,0,.55); white-space: nowrap; cursor: pointer; }
 .lib-fab-mini.on { background: #e5484d; border-color: #e5484d; color: #fff; }
 @media (max-width: 640px) {
     .lib-sources { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
