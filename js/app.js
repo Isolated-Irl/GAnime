@@ -1735,7 +1735,6 @@ const App = {
 
     togglePanel(name) {
         this.searchState.panel = this.searchState.panel === name ? null : name;
-        const panels = document.getElementById('filterPanels');
         const bar = document.getElementById('searchBar');
         if (bar) {
             const input = document.getElementById('ganimeSearchInput');
@@ -1744,7 +1743,6 @@ const App = {
             const ni = document.getElementById('ganimeSearchInput');
             if (ni && document.activeElement !== ni && this._searchHadFocus) { ni.focus(); ni.setSelectionRange(ni.value.length, ni.value.length); }
         }
-        if (panels) panels.innerHTML = this.searchState.panel ? this.filterPanelHTML(this.searchState.panel) : '';
     },
 
     /* Search-bar rebuild: show/hide the whole filter row below the
@@ -2609,7 +2607,7 @@ const App = {
         this.openModal(`
             <h3 class="modal-title">${this._escEp(t.title)} — Trailer</h3>
             <div class="trailer-frame">
-                <iframe src="https://www.youtube-nocookie.com/embed/${t.trailerId}?autoplay=1&rel=0" title="Trailer"
+                <iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(t.trailerId)}?autoplay=1&rel=0" title="Trailer"
                     referrerpolicy="strict-origin-when-cross-origin"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
             </div>
@@ -3699,7 +3697,7 @@ const App = {
             </div><div style="height:14px"></div>`;
         }
         return `
-            <div class="panel-title">Account</div>
+            ${this.backHeader('Account')}
             <div class="settings-group">
                 ${this.sInfo('Status', status)}
             </div>

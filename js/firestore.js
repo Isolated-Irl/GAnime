@@ -62,7 +62,10 @@ const Sync = {
     lastStatus: '',
 
     /* ---------- Tombstones (deletes must propagate) ----------
-       Local store: 'ganime_deleted'. Shape (all timestamps ms):
+       Local store: 'ganime_deleted_<owner>' (namespaced 2026-10-27,
+       Gemini audit — the old global key let one account's
+       tombstones ride into another account's cloud doc). Shape
+       (all timestamps ms):
          { profiles: { pid: ts },
            addons:   { ownerPid: { manifestUrl: ts } },
            watched:  { pid: { titleId: { ep: ts } } },
@@ -74,16 +77,62 @@ const Sync = {
        erase tombstones recorded locally but not yet pushed). */
     DELETED_KEY: 'ganime_deleted',
 
+    /* Owner suffix for the deleted + meta stores: the signed-in
+       uid, 'guest' otherwise. Reuses the existing _auth() helper. */
+    _ownerSuffix() {
+        try {
+            const a = this._auth();
+            if (a && a.signedIn && !a.isGuest && a.uid) return String(a.uid);
+        } catch (e) {}
+        return 'guest';
+    },
+    _deletedKey() { return 'ganime_deleted_' + this._ownerSuffix(); },
+    _metaKey() { return 'ganime_sync_meta_' + this._ownerSuffix(); },
+
+    /* Profile ids belonging to the current owner, for legacy
+       adoption: only tombstones/meta tagged with these ids may
+       carry over from the old global store. */
+    _ownerProfileIds() {
+        try { return new Set((Storage.getProfiles() || []).map(p => String(p.id || '')).filter(Boolean)); }
+        catch (e) { return new Set(); }
+    },
+
     _getDeleted() {
         try {
-            const raw = localStorage.getItem(this.DELETED_KEY);
+            const raw = localStorage.getItem(this._deletedKey());
             const d = raw ? JSON.parse(raw) : null;
-            return (d && typeof d === 'object') ? d : {};
+            if (d && typeof d === 'object') return d;
+        } catch (e) {}
+        /* One-time legacy adoption: the old global store may hold
+           this owner's tombstones. Adopt only entries tagged with
+           this owner's profile ids, so another account's deletions
+           never cross over. */
+        try {
+            const raw = localStorage.getItem(this.DELETED_KEY);
+            const legacy = raw ? JSON.parse(raw) : null;
+            if (!legacy || typeof legacy !== 'object') return {};
+            const pidSet = this._ownerProfileIds();
+            const out = {};
+            if (legacy.profiles) {
+                Object.keys(legacy.profiles).forEach(id => {
+                    if (pidSet.has(String(id))) { if (!out.profiles) out.profiles = {}; out.profiles[id] = legacy.profiles[id]; }
+                });
+            }
+            ['addons', 'watched', 'mylist', 'locallib'].forEach(kind => {
+                if (!legacy[kind]) return;
+                Object.keys(legacy[kind]).forEach(pid => {
+                    if (!pidSet.has(String(pid))) return;
+                    if (!out[kind]) out[kind] = {};
+                    out[kind][pid] = legacy[kind][pid];
+                });
+            });
+            if (Object.keys(out).length) this._saveDeleted(out);
+            return out;
         } catch (e) { return {}; }
     },
 
     _saveDeleted(d) {
-        try { localStorage.setItem(this.DELETED_KEY, JSON.stringify(d || {})); } catch (e) {}
+        try { localStorage.setItem(this._deletedKey(), JSON.stringify(d || {})); } catch (e) {}
     },
 
     /* Record a delete. Called from the delete sites (storage.js /
@@ -278,8 +327,11 @@ const Sync = {
             /* Pagehide flush: ask the browser to finish this
                request even as the tab closes (best effort — the
                body size limit for such requests is small, so a
-               very large doc may still need the next boot sync). */
-            keepalive: !!(opts && opts.keepalive)
+               very large doc may still need the next boot sync).
+               Browsers cap keepalive bodies at 64 KB: only use it
+               for small payloads, or the flush throws instead of
+               quietly waiting for the next boot. */
+            keepalive: !!(opts && opts.keepalive && body.length < 60000)
         });
         if (!res.ok) {
             const text = await res.text().catch(() => '');
@@ -290,16 +342,35 @@ const Sync = {
         return true;
     },
 
-    /* ---------- Sync metadata (per-store timestamps) ---------- */
+    /* ---------- Sync metadata (per-store timestamps) ----------
+       Namespaced like tombstones (2026-10-27): the global key let
+       one account's timestamps leak into another's. The top-level
+       profiles timestamp is NOT adopted from legacy (it is
+       max-wins in merges, so the cloud value re-adopts safely);
+       only per-profile entries matching this owner's profile ids
+       carry over. */
     _meta() {
         try {
+            const raw = localStorage.getItem(this._metaKey());
+            if (raw) { const m = JSON.parse(raw); if (m && typeof m === 'object') return m; }
+        } catch (e) {}
+        try {
             const raw = localStorage.getItem(this.META_KEY);
-            return raw ? JSON.parse(raw) : { profiles: 0, byProfile: {} };
+            const legacy = raw ? JSON.parse(raw) : null;
+            if (!legacy || typeof legacy !== 'object') return { profiles: 0, byProfile: {} };
+            const pidSet = this._ownerProfileIds();
+            const byProfile = {};
+            Object.keys(legacy.byProfile || {}).forEach(pid => {
+                if (pidSet.has(String(pid))) byProfile[pid] = legacy.byProfile[pid];
+            });
+            const out = { profiles: 0, byProfile };
+            this._saveMeta(out);
+            return out;
         } catch (e) { return { profiles: 0, byProfile: {} }; }
     },
 
     _saveMeta(meta) {
-        try { localStorage.setItem(this.META_KEY, JSON.stringify(meta)); } catch (e) {}
+        try { localStorage.setItem(this._metaKey(), JSON.stringify(meta)); } catch (e) {}
     },
 
     _metaFor(pid, store) {

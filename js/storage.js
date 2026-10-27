@@ -269,7 +269,19 @@ const Storage = {
         const pid = profileId || this.getActiveProfileId();
         const map = this.getWatched(pid);
         const entry = map[titleId] || { eps: [], meta: null, updatedAt: 0 };
-        entry.eps = (eps || []).slice().sort((a, b) => a - b);
+        const nextEps = (eps || []).slice().sort((a, b) => a - b);
+        /* Tombstones for removed episodes (Gemini audit 2026-10-27,
+           verified against _mergeWatched): without these, the next
+           cloud merge unions the cloud copy's episodes back and an
+           unwatch resurrects on sync. */
+        try {
+            if (typeof Sync !== 'undefined' && Sync.recordDeleted) {
+                (entry.eps || []).forEach(oldEp => {
+                    if (!nextEps.includes(oldEp)) Sync.recordDeleted('watched', pid, titleId, oldEp);
+                });
+            }
+        } catch (e) {}
+        entry.eps = nextEps;
         if (meta) entry.meta = { ...(entry.meta || {}), ...meta };
         entry.updatedAt = Date.now();
         map[titleId] = entry;
