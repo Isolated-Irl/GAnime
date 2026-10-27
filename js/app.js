@@ -2448,6 +2448,23 @@ const App = {
             <div class="screen-pad">
                 ${lower}
             </div>`;
+        // Mobile details layout (2026-10-27): the shrink belongs
+        // INSIDE the anime page only — move the description + buttons
+        // out of the hero box so the hero image shrinks to just the
+        // name block, with description left and buttons right below.
+        // Desktop keeps everything inside the hero, untouched.
+        if (window.matchMedia('(max-width: 640px)').matches) {
+            const hero = box.querySelector('.details-hero');
+            const content = hero && hero.querySelector('.hero-content');
+            const syn = content && content.querySelector('.hero-synopsis');
+            const acts = content && content.querySelector('.hero-actions');
+            if (syn && acts) {
+                const below = document.createElement('div');
+                below.className = 'details-below';
+                below.append(syn, acts);
+                hero.after(below);
+            }
+        }
     },
 
     toggleLibMenu(ev) {

@@ -1212,6 +1212,20 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     #homeHero .hero-actions .btn-play { display: none; }
     #homeHero .hero-actions .btn-details { order: -1; }
     #homeHero .hero-dots { order: 6; justify-content: center; }
+    /* Details hero, mobile (2026-10-27): the shrink lives HERE,
+       not on the home hero — description + buttons move below the
+       image (renderDetails moves them out of .details-hero on
+       mobile renders), name/chips/genres stay inside the image,
+       buttons stack on the right side of the description.
+       Desktop details untouched. */
+    .details-hero .hero-content { margin-top: 16px; }
+    .details-hero { padding: 16px 16px 20px; }
+    .details-below { display: flex; gap: 12px; padding: 16px; align-items: flex-start; }
+    .details-below .hero-synopsis { flex: 1; min-width: 0; margin-top: 0; }
+    .details-below .hero-actions { flex: none; width: 132px; flex-direction: column; flex-wrap: nowrap; margin-top: 0; }
+    .details-below .hero-actions .btn-play, .details-below .hero-actions .btn-ghost { width: 100%; padding: 10px 12px; font-size: 13px; justify-content: center; }
+    .details-below .hero-actions .lib-wrap { width: 100%; }
+    .details-below .hero-actions .lib-wrap .btn-ghost { width: 100%; }
     /* Top-bar avatar pill (2026-10-27): the name hides on mobile but
        the chip kept its wide right padding, pushing the avatar left
        in its pill — symmetric padding centres it again. */
