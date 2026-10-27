@@ -1635,15 +1635,13 @@ const App = {
     STATUSES: [['RELEASING', 'Airing'], ['FINISHED', 'Finished'], ['NOT_YET_RELEASED', 'Not Yet Aired'], ['CANCELLED', 'Cancelled']],
     SORTS: [['POPULARITY_DESC', 'Popularity'], ['SCORE_DESC', 'Average Score'], ['TRENDING_DESC', 'Trending'], ['TITLE_ROMAJI', 'Title'], ['FAVOURITES_DESC', 'Favorites'], ['START_DATE_DESC', 'Release Date'], ['ID_DESC', 'Date Added']],
     COUNTRIES: [['JP', 'Japan'], ['KR', 'South Korea'], ['CN', 'China'], ['TW', 'Taiwan']],
-    SOURCES: [['ORIGINAL', 'Original'], ['MANGA', 'Manga'], ['LIGHT_NOVEL', 'Light Novel'], ['WEB_NOVEL', 'Web Novel'], ['NOVEL', 'Novel'], ['ANIME', 'Anime'], ['VISUAL_NOVEL', 'Visual Novel'], ['VIDEO_GAME', 'Video Game'], ['DOUJIN', 'Doujinshi'], ['COMIC', 'Comic'], ['LIVE_ACTION', 'Live Action'], ['GAME', 'Game'], ['MULTIMEDIA_PROJECT', 'Multimedia Project'], ['PICTURE_BOOK', 'Picture Book'], ['OTHER', 'Other']],
     searchState: null,
 
     defaultSearchState() {
         return {
             q: '', genres: [], tags: [], year: '', season: '', format: '', status: '',
-            sort: 'POPULARITY_DESC', view: 'grid', country: '', source: '',
-            yearMin: '', yearMax: '', epMin: '', epMax: '', durMin: '', durMax: '',
-            doujin: false, panel: null
+            sort: 'POPULARITY_DESC', view: 'grid', country: '',
+            filtersOpen: false, panel: null
         };
     },
 
@@ -1652,37 +1650,7 @@ const App = {
         if (!bar) return;
         if (!this.searchState) this.searchState = this.defaultSearchState();
         const s = this.searchState;
-        const sum = (arr, label) => arr.length ? `${label}: ${arr[0]}${arr.length > 1 ? ' +' + (arr.length - 1) : ''}` : 'Any';
-        const pick = (pairs, v) => { const hit = pairs.find(p => p[0] === v); return hit ? hit[1] : 'Any'; };
-        const ctrl = (name, label, summary) => `
-            <div class="fctrl">
-                <div class="fctrl-label">${label}</div>
-                <button class="fctrl-btn ${s.panel === name ? 'open' : ''}" onclick="App.togglePanel('${name}')">${summary} <span class="fctrl-chev">▾</span></button>
-            </div>`;
-        bar.innerHTML = `
-            <div class="filter-bar">
-                <div class="fctrl fctrl-search">
-                    <div class="fctrl-label">Search</div>
-                    <div class="search-wrap">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" id="ganimeSearchInput" class="app-input search-input" placeholder="Search anime…"
-                            value="${s.q.replace(/"/g, '&quot;')}" oninput="App.onSearchInput(this.value)">
-                        <button class="search-clear ${s.q ? '' : 'hidden'}" id="searchClearBtn" onclick="App.clearSearch()">✕</button>
-                    </div>
-                </div>
-                ${ctrl('genres', 'Genres', sum(s.genres, 'Genres'))}
-                ${ctrl('tags', 'Tags', sum(s.tags, 'Tags'))}
-                ${ctrl('year', 'Year', s.year || 'Any')}
-                ${ctrl('season', 'Season', pick(this.SEASONS, s.season))}
-                ${ctrl('format', 'Format', pick(this.FORMATS, s.format))}
-                ${ctrl('status', 'Airing Status', pick(this.STATUSES, s.status))}
-                <div class="fctrl">
-                    <div class="fctrl-label">&nbsp;</div>
-                    <button class="fctrl-btn fctrl-sliders ${s.panel === 'advanced' ? 'open' : ''}" title="Advanced filters" onclick="App.togglePanel('advanced')">⚙</button>
-                </div>
-            </div>
-            <div id="filterPanels">${s.panel ? this.filterPanelHTML(s.panel) : ''}</div>
-            <div id="activeChips">${this.activeChipsHTML()}</div>`;
+        bar.innerHTML = this.renderSearchBarHTML(s.q);
         this.searchReady = true;
         AniList.tags().then(list => { this.tagList = list; if (this.searchState && this.searchState.panel === 'tags') this.refreshFilterBar(false); });
         if (this.isFiltering()) this.runBrowse();
@@ -1717,6 +1685,12 @@ const App = {
         s.panel = had;
     },
 
+    /* Search-bar rebuild (2026-10-27): AniList-style top row — a big
+       search bar plus a filter button. Tapping the filter button
+       opens the filter row below the bar (same fctrl controls as
+       before, kept as-is). Country of Origin is the last kept
+       filter; Source / Year Range / Episodes / Duration / Doujin
+       were removed at the user's direction. */
     renderSearchBarHTML(val) {
         const s = this.searchState;
         const sum = (arr, label) => arr.length ? `${label}: ${arr[0]}${arr.length > 1 ? ' +' + (arr.length - 1) : ''}` : 'Any';
@@ -1726,28 +1700,26 @@ const App = {
                 <div class="fctrl-label">${label}</div>
                 <button class="fctrl-btn ${s.panel === name ? 'open' : ''}" onclick="App.togglePanel('${name}')">${summary} <span class="fctrl-chev">▾</span></button>
             </div>`;
+        const slidersIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2.2" fill="var(--bg-card)"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2.2" fill="var(--bg-card)"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2.2" fill="var(--bg-card)"/></svg>`;
         return `
-            <div class="filter-bar">
-                <div class="fctrl fctrl-search">
-                    <div class="fctrl-label">Search</div>
-                    <div class="search-wrap">
-                        <span class="search-icon">🔍</span>
-                        <input type="text" id="ganimeSearchInput" class="app-input search-input" placeholder="Search anime…"
-                            value="${(val != null ? val : s.q).replace(/"/g, '&quot;')}" oninput="App.onSearchInput(this.value)">
-                        <button class="search-clear ${s.q ? '' : 'hidden'}" id="searchClearBtn" onclick="App.clearSearch()">✕</button>
-                    </div>
+            <div class="search-toprow">
+                <div class="search-wrap">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="ganimeSearchInput" class="app-input search-input" placeholder="Search anime…"
+                        value="${(val != null ? val : s.q).replace(/"/g, '&quot;')}" oninput="App.onSearchInput(this.value)">
+                    <button class="search-clear ${s.q ? '' : 'hidden'}" id="searchClearBtn" onclick="App.clearSearch()">✕</button>
                 </div>
+                <button class="fctrl-btn fctrl-sliders ${s.filtersOpen ? 'open' : ''}" title="Filters" onclick="App.toggleFilters()">${slidersIcon}</button>
+            </div>
+            ${s.filtersOpen ? `<div class="filter-bar filter-row">
                 ${ctrl('genres', 'Genres', sum(s.genres, 'Genres'))}
                 ${ctrl('tags', 'Tags', sum(s.tags, 'Tags'))}
                 ${ctrl('year', 'Year', s.year || 'Any')}
                 ${ctrl('season', 'Season', pick(this.SEASONS, s.season))}
                 ${ctrl('format', 'Format', pick(this.FORMATS, s.format))}
                 ${ctrl('status', 'Airing Status', pick(this.STATUSES, s.status))}
-                <div class="fctrl">
-                    <div class="fctrl-label">&nbsp;</div>
-                    <button class="fctrl-btn fctrl-sliders ${s.panel === 'advanced' ? 'open' : ''}" title="Advanced filters" onclick="App.togglePanel('advanced')">⚙</button>
-                </div>
-            </div>
+                ${ctrl('country', 'Country of Origin', pick(this.COUNTRIES, s.country))}
+            </div>` : ''}
             <div id="filterPanels">${s.panel ? this.filterPanelHTML(s.panel) : ''}</div>
             <div id="activeChips">${this.activeChipsHTML()}</div>`;
     },
@@ -1766,6 +1738,23 @@ const App = {
         if (panels) panels.innerHTML = this.searchState.panel ? this.filterPanelHTML(this.searchState.panel) : '';
     },
 
+    /* Search-bar rebuild: show/hide the whole filter row below the
+       big search bar. Closing the row also closes any open
+       dropdown panel, so no orphan panel renders without its row. */
+    toggleFilters() {
+        const s = this.searchState;
+        s.filtersOpen = !s.filtersOpen;
+        if (!s.filtersOpen) s.panel = null;
+        const bar = document.getElementById('searchBar');
+        if (bar) {
+            const input = document.getElementById('ganimeSearchInput');
+            const val = input ? input.value : s.q;
+            bar.innerHTML = this.renderSearchBarHTML(val);
+            const ni = document.getElementById('ganimeSearchInput');
+            if (ni && document.activeElement !== ni && this._searchHadFocus) { ni.focus(); ni.setSelectionRange(ni.value.length, ni.value.length); }
+        }
+    },
+
     filterPanelHTML(name) {
         const s = this.searchState;
         if (name === 'genres' || name === 'tags') {
@@ -1782,35 +1771,13 @@ const App = {
             return `<div class="fpanel"><div class="fopt-list">${years.map(y =>
                 `<button class="fopt ${(s.year || 'Any') === y ? 'on' : ''}" onclick="App.setSingleFilter('year','${y === 'Any' ? '' : y}')">${y}</button>`).join('')}</div></div>`;
         }
-        if (name === 'season' || name === 'format' || name === 'status') {
-            const pairs = name === 'season' ? this.SEASONS : name === 'format' ? this.FORMATS : this.STATUSES;
+        if (name === 'season' || name === 'format' || name === 'status' || name === 'country') {
+            const pairs = name === 'season' ? this.SEASONS : name === 'format' ? this.FORMATS : name === 'country' ? this.COUNTRIES : this.STATUSES;
             const key = name;
             return `<div class="fpanel"><div class="fopt-list">
                 <button class="fopt ${!s[key] ? 'on' : ''}" onclick="App.setSingleFilter('${key}','')">Any</button>
                 ${pairs.map(p => `<button class="fopt ${s[key] === p[0] ? 'on' : ''}" onclick="App.setSingleFilter('${key}','${p[0]}')">${p[1]}</button>`).join('')}
                 </div></div>`;
-        }
-        if (name === 'advanced') {
-            const sel = (key, pairs, label) => `
-                <label class="adv-field"><span>${label}</span>
-                    <select class="app-input adv-select" onchange="App.setSingleFilter('${key}', this.value)">
-                        <option value="">Any</option>
-                        ${pairs.map(p => `<option value="${p[0]}" ${s[key] === p[0] ? 'selected' : ''}>${p[1]}</option>`).join('')}
-                    </select></label>`;
-            const range = (keyMin, keyMax, min, max, label, unit) => `
-                <div class="adv-field"><span>${label}: <b>${s[keyMin] || min} – ${s[keyMax] || max}${unit || ''}</b></span>
-                    <div class="adv-range-row">
-                        <input type="range" min="${min}" max="${max}" value="${s[keyMin] || min}" onchange="App.setRangeFilter('${keyMin}', this.value)">
-                        <input type="range" min="${min}" max="${max}" value="${s[keyMax] || max}" onchange="App.setRangeFilter('${keyMax}', this.value)">
-                    </div></div>`;
-            return `<div class="fpanel adv-panel">
-                ${sel('country', this.COUNTRIES, 'Country of Origin')}
-                ${sel('source', this.SOURCES, 'Source Material')}
-                ${range('yearMin', 'yearMax', 1940, 2027, 'Year Range')}
-                ${range('epMin', 'epMax', 0, 200, 'Episodes')}
-                ${range('durMin', 'durMax', 0, 180, 'Duration', ' min')}
-                <label class="adv-check"><input type="checkbox" ${s.doujin ? 'checked' : ''} onchange="App.setDoujin(this.checked)"> Doujin</label>
-            </div>`;
         }
         return '';
     },
@@ -1838,8 +1805,6 @@ const App = {
         if (s.format) one('Format: ' + s.format, "App.setSingleFilter('format','')");
         if (s.status) one('Status: ' + s.status, "App.setSingleFilter('status','')");
         if (s.country) one('Country: ' + s.country, "App.setSingleFilter('country','')");
-        if (s.source) one('Source: ' + s.source, "App.setSingleFilter('source','')");
-        if (s.doujin) one('Doujin', 'App.setDoujin(false)');
         if (!chips.length) return '';
         return `<div class="active-chips">${chips.join('')}<button class="clear-all" onclick="App.clearAllFilters()">Clear all</button></div>`;
     },
@@ -1848,8 +1813,7 @@ const App = {
         const s = this.searchState;
         if (!s) return false;
         return s.q.trim().length >= 2 || s.genres.length || s.tags.length || s.year || s.season ||
-            s.format || s.status || s.country || s.source || s.yearMin || s.yearMax ||
-            s.epMin || s.epMax || s.durMin || s.durMax || s.doujin;
+            s.format || s.status || s.country;
     },
 
     applyFilters() {
@@ -1893,21 +1857,6 @@ const App = {
 
     setSingleFilter(key, value) {
         this.searchState[key] = value;
-        const bar = document.getElementById('searchBar');
-        const input = document.getElementById('ganimeSearchInput');
-        if (bar) bar.innerHTML = this.renderSearchBarHTML(input ? input.value : this.searchState.q);
-        this.applyFilters();
-    },
-
-    setRangeFilter(key, value) {
-        this.searchState[key] = value;
-        this.applyFilters();
-        const panels = document.getElementById('filterPanels');
-        if (panels && this.searchState.panel) panels.innerHTML = this.filterPanelHTML(this.searchState.panel);
-    },
-
-    setDoujin(checked) {
-        this.searchState.doujin = checked;
         const bar = document.getElementById('searchBar');
         const input = document.getElementById('ganimeSearchInput');
         if (bar) bar.innerHTML = this.renderSearchBarHTML(input ? input.value : this.searchState.q);
@@ -2053,13 +2002,7 @@ const App = {
         const reqId = (this._browseReqId = (this._browseReqId || 0) + 1);
         const s = this.searchState;
         results.innerHTML = '<p class="text-secondary" style="margin-top:16px">Searching AniList…</p>';
-        const effectiveTags = s.tags.slice();
-        if (s.doujin && this.tagList.includes('Doujinshi') && !effectiveTags.includes('Doujinshi')) effectiveTags.push('Doujinshi');
-        const filters = Object.assign({}, s, {
-            tags: effectiveTags,
-            yearMin: s.year ? '' : s.yearMin,
-            yearMax: s.year ? '' : s.yearMax
-        });
+        const filters = Object.assign({}, s, { tags: s.tags.slice() });
         try {
             let found = await AniList.browse(filters, 36);
             if (reqId !== this._browseReqId) return;

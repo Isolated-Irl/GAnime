@@ -497,8 +497,12 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
    search sections/results, calendar day strip + rows
    ============================================================ */
 .filter-bar { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+/* Search-bar rebuild (2026-10-27): big search bar + filter button row. */
+.search-toprow { display: flex; gap: 12px; align-items: stretch; }
+.search-toprow .search-wrap { flex: 1; min-width: 0; }
+.search-toprow .search-input { font-size: 17px; padding-top: 16px; padding-bottom: 16px; }
+.filter-row { margin-top: 12px; }
 .fctrl { min-width: 118px; }
-.fctrl-search { flex: 1; min-width: 220px; }
 .fctrl-label {
     font-size: 11px; font-weight: 800; letter-spacing: 1px;
     color: var(--text-secondary); text-transform: uppercase; margin-bottom: 6px;
@@ -544,13 +548,6 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
 .fopt:hover { background: var(--focus-bg); color: var(--text-primary); }
 .fopt.on { color: var(--accent); background: var(--focus-bg); }
 .tag-filter-input { margin-bottom: 12px; }
-.adv-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
-.adv-field { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-.adv-select { padding: 10px 12px; font-size: 13px; }
-.adv-range-row { display: flex; gap: 10px; }
-.adv-range-row input[type="range"] { flex: 1; accent-color: var(--accent); }
-.adv-check { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; cursor: pointer; }
-.adv-check input { width: 17px; height: 17px; accent-color: var(--accent); }
 .active-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
 .active-chip {
     background: var(--accent); color: var(--on-accent); border: none; cursor: pointer;
@@ -642,7 +639,14 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
 @media (max-width: 640px) {
     .cal2-day-count { display: none; }
     .fctrl { min-width: 46%; }
-    .fctrl-search { min-width: 100%; }
+}
+
+/* Search-bar rebuild: on mobile the filter row slides sideways
+   (same layout as desktop, swipe to reach the off-screen options). */
+@media (max-width: 640px) {
+    .filter-row { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+    .filter-row::-webkit-scrollbar { display: none; }
+    .filter-row .fctrl { flex: 0 0 auto; min-width: 148px; }
 }
 
 /* --- Addons manager --- */
