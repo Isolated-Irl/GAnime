@@ -901,12 +901,6 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
 .lib-prog .wavy-track { flex: 1; }
 .skl-card { aspect-ratio: 2 / 3; border-radius: 14px; background: linear-gradient(100deg, var(--bg-elevated) 40%, rgba(255, 255, 255, 0.07) 50%, var(--bg-elevated) 60%); background-size: 220% 100%; animation: sklShimmer 1.3s linear infinite; }
 
-/* Library sort: short pill select pinned right of the filter chips */
-.lib-sort-wrap { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex: none; }
-.lib-sort-label { font-size: 12px; font-weight: 800; letter-spacing: 0.8px; color: var(--text-secondary); }
-.lib-sort { width: auto; max-width: 168px; padding: 8px 10px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); font-weight: 700; font-size: 13px; cursor: pointer; }
-.lib-sort:focus { border-color: var(--accent); outline: none; }
-
 /* Simkl PIN device code */
 .device-code { color: var(--accent); font-family: ui-monospace, monospace; font-size: 34px; font-weight: 800; letter-spacing: 8px; text-align: center; background: var(--bg-elevated); border: 1.6px dashed var(--border-subtle); border-radius: 14px; padding: 14px 10px; margin-bottom: 10px; }
 
@@ -1217,3 +1211,30 @@ html.splash-skip #splashScreen { display: none !important; }
 body.glass-off .top-bar, body.glass-off .modal-backdrop, body.glass-off .btn-ghost, body.glass-off .hchip { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* --- Library layout pass (2026-10-27): sort icon in source row,
+   Cloud/Local label, mobile floating status button, poster badge --- */
+.lib-sources { position: relative; }
+.lib-sort-icon { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; margin-left: auto; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; cursor: pointer; }
+.lib-sort-menu { position: absolute; right: 0; top: calc(100% + 6px); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 6px; width: 200px; box-shadow: 0 12px 30px rgba(0,0,0,.6); z-index: 160; }
+.lib-sort-row { display: block; width: 100%; text-align: left; padding: 9px 12px; border: none; background: transparent; color: var(--text-secondary); border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.lib-sort-row.on { background: var(--focus-bg); color: var(--text-primary); }
+/* Poster episode badge: local-library cards only (posterCardHTML
+   stays shared — the badge is passed in, never a global poster change). */
+.lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: rgba(42,92,255,.35); color: #fff; border: none; border-radius: 999px; padding: 1px 3px; font-size: 5px; font-weight: 700; line-height: 1.5; z-index: 2; }
+/* Mobile floating status button: hidden on desktop, replaces the
+   status pills row on phones. Sits above the bottom pill nav. */
+.lib-fab-wrap { display: none; }
+.lib-fab-wrap { position: fixed; right: 16px; bottom: 84px; z-index: 140; }
+.lib-fab-stack { display: none; flex-direction: column; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
+.lib-fab-stack.open { display: flex; }
+.lib-fab { display: inline-flex; align-items: center; gap: 8px; background: #2a5cff; color: #fff; border: none; border-radius: 16px; padding: 13px 18px; font-size: 14px; font-weight: 800; box-shadow: 0 8px 22px rgba(42,92,255,.5); cursor: pointer; }
+.lib-fab-mini { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 6px 16px rgba(0,0,0,.55); white-space: nowrap; cursor: pointer; }
+.lib-fab-mini.on { background: #e5484d; border-color: #e5484d; color: #fff; }
+@media (max-width: 640px) {
+    .lib-sources { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .lib-sources::-webkit-scrollbar { display: none; }
+    .lib-sort-icon { margin-left: 0; }
+    .lib-status-row { display: none; }
+    .lib-fab-wrap { display: block; }
+}

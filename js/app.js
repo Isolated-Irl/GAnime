@@ -1266,20 +1266,20 @@ const App = {
         return Config.HERO_IDS.map(id => this.titleById(id));
     },
 
-    posterArt(t, cls) {
+    posterArt(t, cls, inner) {
         const bg = `background:linear-gradient(155deg, hsl(${t.hue} 65% 44%), hsl(${t.hue + 45} 72% 24%))`;
         const _poster = this._safeImgUrl(t.poster);
         if (_poster) {
-            return `<div class="poster-art ${cls || ''}" style="${bg}"><img class="poster-img" src="${_poster}" alt="" loading="lazy"></div>`;
+            return `<div class="poster-art ${cls || ''}" style="${bg}">${inner || ''}<img class="poster-img" src="${_poster}" alt="" loading="lazy"></div>`;
         }
-        return `<div class="poster-art ${cls || ''}" style="${bg}"><span>${t.title.charAt(0)}</span></div>`;
+        return `<div class="poster-art ${cls || ''}" style="${bg}">${inner || ''}<span>${t.title.charAt(0)}</span></div>`;
     },
 
-    posterCardHTML(t) {
+    posterCardHTML(t, badgeHTML) {
         return `
             <div class="poster-card" data-tid="${t.id}" onclick="App.openDetails('${t.id}')"
                 onmouseenter="App.hoverIn(this,'${t.id}')" onmouseleave="App.hoverOut()">
-                ${this.posterArt(t)}
+                ${this.posterArt(t, '', badgeHTML)}
                 <div class="poster-title">${this.esc(t.title)}</div>
                 <div class="poster-meta">★ ${t.score} · ${t.year}</div>
             </div>`;
@@ -4131,11 +4131,24 @@ const App = {
 
     setLibrarySort(value) {
         this.librarySort = value;
+        this.librarySortMenuOpen = false;
         this.renderLibrary();
+    },
+
+    toggleLibrarySortMenu() {
+        this.librarySortMenuOpen = !this.librarySortMenuOpen;
+        this.renderLibrary();
+    },
+
+    /* Three-bar sort icon (same mark as the mobile status button). */
+    sortIconSVG() {
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="15" y2="12"/><line x1="4" y1="18" x2="10" y2="18"/><path d="M17 4l3 3-3 3" fill="none"/></svg>`;
     },
 
     librarySourceTab: 'Local',
     localLibFilter: 'Watching',
+    librarySortMenuOpen: false,
+    localLibFabOpen: false,
 
     setLibrarySource(src) {
         this.librarySourceTab = src;
@@ -4150,6 +4163,12 @@ const App = {
 
     setLocalLibFilter(key) {
         this.localLibFilter = key;
+        this.localLibFabOpen = false;
+        this.renderLibrary();
+    },
+
+    toggleLocalLibFab() {
+        this.localLibFabOpen = !this.localLibFabOpen;
         this.renderLibrary();
     },
 
@@ -4181,7 +4200,8 @@ const App = {
             const total = t.eps || 0;
             const seen = ((watchedMap[id] || {}).eps || []).length;
             const pct = total ? Math.min(100, Math.round((seen / total) * 100)) : 0;
-            return `<div class="lib-item">${this.posterCardHTML(t)}<div class="lib-prog"><div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div><span>${seen}${total ? ' / ' + total : ''} eps</span></div></div>`;
+            const badge = `<span class="lib-ep-badge">${total ? seen + '/' + total : seen}</span>`;
+            return `<div class="lib-item">${this.posterCardHTML(t, badge)}<div class="lib-prog"><div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div></div></div>`;
         }).join('');
         const savedIds = ids.filter(id => (lib[id].savedEps || []).length);
         const savedHTML = savedIds.length ? `
@@ -4190,10 +4210,18 @@ const App = {
                 const t = entryTitle(id);
                 return `<div class="lib-item">${this.posterCardHTML(t)}<div class="lib-prog"><span>${lib[id].savedEps.slice().sort((a, b) => a - b).map(n => 'EP ' + n).join(' · ')}</span></div></div>`;
             }).join('')}</div>` : '';
+        const fabMinis = ['ALL'].concat(statuses).map(k => {
+            const label = k === 'ALL' ? 'All' : k;
+            const count = k === 'ALL' ? ids.filter(id => lib[id].status).length : counts[k];
+            return `<button class="lib-fab-mini ${filter === k ? 'on' : ''}" onclick="App.setLocalLibFilter('${k}')">${label} · ${count}</button>`;
+        }).join('');
+        const fabLabel = filter === 'ALL' ? 'All' : filter;
+        const fabHTML = `<div class="lib-fab-wrap"><div class="lib-fab-stack ${this.localLibFabOpen ? 'open' : ''}">${fabMinis}</div><button class="lib-fab" onclick="App.toggleLocalLibFab()">${this.sortIconSVG()} ${fabLabel}</button></div>`;
         return `
-            <div class="stream-tabs" style="margin-bottom:14px">${chips}</div>
+            <div class="stream-tabs lib-status-row" style="margin-bottom:14px">${chips}</div>
             ${cards ? `<div class="search-grid">${cards}</div>` : `<p class="text-secondary">${filter === 'ALL' ? 'Nothing in your Local library yet — Add to Library on any title puts it here.' : 'No titles with this status yet.'}</p>`}
-            ${savedHTML}`;
+            ${savedHTML}
+            ${fabHTML}`;
     },
 
     renderLibrary() {
@@ -4201,11 +4229,13 @@ const App = {
         const grid = document.getElementById('libraryGrid');
         if (!controls || !grid) return;
         const source = this.librarySourceTab || 'Local';
-        const sortSelect = `<span class="lib-sort-wrap"><span class="lib-sort-label">Sort</span><select class="lib-sort" onchange="App.setLibrarySort(this.value)">${this.LIBRARY_SORTS.map(p => `<option value="${p[0]}" ${this.librarySort === p[0] ? 'selected' : ''}>${p[1]}</option>`).join('')}</select></span>`;
+        const auth = Storage.getAuthState();
+        const localLabel = auth && auth.signedIn ? 'Cloud' : 'Local';
         const srcBtn = (key, label) => `<button class="ftab ${source === key ? 'active' : ''}" onclick="App.setLibrarySource('${key}')">${label}</button>`;
+        const sortMenu = this.librarySortMenuOpen ? `<div class="lib-sort-menu">${this.LIBRARY_SORTS.map(p => `<button class="lib-sort-row ${this.librarySort === p[0] ? 'on' : ''}" onclick="App.setLibrarySort('${p[0]}')">${p[1]}</button>`).join('')}</div>` : '';
         const headerHTML = `
-            <div class="lib-head"><h2 class="screen-title">Library</h2>${sortSelect}</div>
-            <div class="stream-tabs lib-sources">${srcBtn('Local', 'Local')}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}</div>`;
+            <div class="lib-head"><h2 class="screen-title">Library</h2></div>
+            <div class="stream-tabs lib-sources">${srcBtn('Local', localLabel)}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}<button class="lib-sort-icon" onclick="App.toggleLibrarySortMenu()" title="Sort">${this.sortIconSVG()}</button>${sortMenu}</div>`;
         if (source === 'Local') {
             controls.innerHTML = headerHTML;
             grid.innerHTML = this.libraryLocalHTML();
