@@ -1198,6 +1198,20 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
        synopsis and buttons are back exactly as before. Only the ART
        changes on mobile (poster instead of banner, picked in
        renderHero). Avatar pill + smaller bottom bar below stay. */
+    /* Homepage hero, mobile (2026-10-27, v4): description gone,
+       name first in the lower cluster, genre below it, meta row
+       below genre, Details first in the button row, Play removed,
+       dots centred. Markup untouched — desktop keeps everything. */
+    #homeHero .hero-content { display: flex; flex-direction: column; }
+    #homeHero .hero-title { order: 1; }
+    #homeHero .hero-title-sub { order: 2; }
+    #homeHero .hero-genres { order: 3; margin-bottom: 12px; }
+    #homeHero .hero-chips { order: 4; }
+    #homeHero .hero-synopsis { display: none; }
+    #homeHero .hero-actions { order: 5; }
+    #homeHero .hero-actions .btn-play { display: none; }
+    #homeHero .hero-actions .btn-details { order: -1; }
+    #homeHero .hero-dots { order: 6; justify-content: center; }
     /* Top-bar avatar pill (2026-10-27): the name hides on mobile but
        the chip kept its wide right padding, pushing the avatar left
        in its pill — symmetric padding centres it again. */
