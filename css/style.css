@@ -1153,6 +1153,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
 .te-result.ok { color: #2fbf71; }
 .te-result.err { color: #f87171; }
 .te-footer { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.te-footer .btn-secondary, .te-footer .btn-primary { flex: 1; }
 .te-dirty { flex: 1; font-size: 12.5px; color: var(--text-secondary); font-weight: 600; }
 .te-footer .btn-primary[disabled] { opacity: 0.45; cursor: not-allowed; }
 
@@ -1228,7 +1229,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     .details-hero.has-banner-img { padding: 0; min-height: 0; }
     .details-hero.has-banner-img .back-btn { position: absolute; top: 12px; left: 12px; z-index: 2; margin-bottom: 0; }
     .details-hero.has-banner-img::after { display: none; }
-    .details-banner-img { width: 100%; height: auto; display: block; }
+    .details-banner-img { width: 100%; height: 200px; object-fit: fill; display: block; }
     .details-below { display: flex; flex-direction: column; padding: 16px; }
     .details-below .hero-chips { margin-bottom: 10px; }
     .details-below .hero-title { font-size: 30px; }

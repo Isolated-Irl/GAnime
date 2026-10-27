@@ -274,7 +274,26 @@ const Storage = {
         entry.updatedAt = Date.now();
         map[titleId] = entry;
         this._write(this._watchedKey(pid), map);
+        // Any fresh watch clears a local unwatch flag for the title.
+        if (eps && eps.length) this.setUnwatched(titleId, false, pid);
         return entry.eps;
+    },
+    /* Local unwatch flags (2026-10-27): a title the user explicitly
+       unwatched here. Local-only by design — collectLocal reads
+       explicit keys, so this key never syncs, and tracker progress
+       must not resurrect the title on refresh. */
+    _unwatchedKey(profileId) {
+        return 'ganime_unwatched_' + (profileId || this.getActiveProfileId());
+    },
+    getUnwatched(profileId) {
+        return this._read(this._unwatchedKey(profileId), {}) || {};
+    },
+    setUnwatched(titleId, on, profileId) {
+        const pid = profileId || this.getActiveProfileId();
+        const map = this.getUnwatched(pid);
+        if (on) map[titleId] = 1;
+        else delete map[titleId];
+        this._write(this._unwatchedKey(pid), map);
     },
     toggleWatched(titleId, ep, meta, profileId) {
         const pid = profileId || this.getActiveProfileId();
@@ -291,6 +310,8 @@ const Storage = {
         entry.updatedAt = Date.now();
         map[titleId] = entry;
         this._write(this._watchedKey(pid), map);
+        // Watching an episode again clears a local unwatch flag.
+        if (entry.eps.length) this.setUnwatched(titleId, false, pid);
         return entry.eps;
     },
 

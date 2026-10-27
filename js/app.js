@@ -2131,6 +2131,10 @@ const App = {
     getEffectiveWatchedEps(t) {
         if (!t) return [];
         const local = ((Storage.getWatched()[t.id] || {}).eps || []).slice();
+        // Local unwatch wins: a title the user explicitly unwatched
+        // here must not come back as watched from tracker progress
+        // on refresh. The flag itself never syncs.
+        try { if (Storage.getUnwatched()[t.id]) return local.slice().sort((a, b) => a - b); } catch (e) {}
         let trackerProg = 0;
         try {
             if ((Storage.getSettings().continueWatchingSource || 'tracked') === 'tracked' && this.trackingLists) {
@@ -2573,6 +2577,7 @@ const App = {
         // Revert does not sync: unwatching stays local only, tracker
         // progress is left alone. Marking still pushes, as before.
         if (changed && next.length) this.pushAnilistProgress(t);
+        if (changed && !next.length) Storage.setUnwatched(t.id, true);
         this.renderDetails();
     },
 
@@ -2702,8 +2707,6 @@ const App = {
 
     _teSyncFooter() {
         const n = this._teDirtyCount();
-        const label = document.getElementById('teDirtyLabel');
-        if (label) label.textContent = n ? n + ' service(s) modified' : 'No changes pending';
         const btn = document.getElementById('teSaveBtn');
         if (btn) btn.disabled = !n;
     },
@@ -2821,7 +2824,6 @@ const App = {
                 ${resLine('simkl')}
             </div>
             <div class="te-footer">
-                <span class="te-dirty" id="teDirtyLabel">${this._teDirtyCount() ? this._teDirtyCount() + ' service(s) modified' : 'No changes pending'}</span>
                 <button class="btn-secondary" onclick="App.closeModal()">Close</button>
                 <button class="btn-primary" id="teSaveBtn" ${this._teDirtyCount() ? '' : 'disabled'} onclick="App.teSave()">Save Progress</button>
             </div>
