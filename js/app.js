@@ -2413,6 +2413,11 @@ const App = {
         let nextEp = 1;
         while (nextEp <= total && watchedEps.includes(nextEp)) nextEp++;
         if (nextEp > total) nextEp = 1;
+        // Mark-watched toggle label uses LOCAL watched (same source as
+        // the toggle) so the button and the action never disagree.
+        const localWatchedEps = ((Storage.getWatched()[t.id] || {}).eps || []);
+        const markTotal = t.type === 'Movie' ? 1 : (t.eps || (this.detailsUi.epData ? this.detailsUi.epData.length : 0));
+        const allWatchedLocal = markTotal > 0 && Array.from({ length: markTotal }, (_, i) => i + 1).every(n => localWatchedEps.includes(n));
         const libEntry = Storage.getLocalEntry(t.id);
         const libStatuses = ['Watching', 'Completed', 'Plan to Watch', 'On Hold', 'Dropped', 'Rewatching'];
         const lower = t.type === 'Movie' ? this.movieSectionHtml(t) : this.episodesSectionHtml(t);
@@ -2440,7 +2445,7 @@ const App = {
                                 ${libEntry && libEntry.status ? '<button class="lib-menu-row danger" onclick="App.setLibraryStatus(null)">Remove from Library</button>' : ''}
                             </div>
                         </div>
-                        <button class="btn-ghost" onclick="App.markAllWatched()">${t.type === 'Movie' ? (watchedEps.includes(1) ? '✓ Watched' : 'Mark Watched') : 'Mark All Watched'}</button>
+                        <button class="btn-ghost" onclick="App.markAllWatched()">${t.type === 'Movie' ? (localWatchedEps.includes(1) ? '✓ Watched' : 'Mark Watched') : (allWatchedLocal ? '✓ All Watched' : 'Mark All Watched')}</button>
                         ${t.trailerId ? `<button class="btn-ghost" onclick="App.openTrailer()">🎬 Trailer</button>` : ''}
                     </div>
                 </div>
@@ -2448,21 +2453,53 @@ const App = {
             <div class="screen-pad">
                 ${lower}
             </div>`;
-        // Mobile details layout (2026-10-27): the shrink belongs
-        // INSIDE the anime page only — move the description + buttons
-        // out of the hero box so the hero image shrinks to just the
-        // name block, with description left and buttons right below.
-        // Desktop keeps everything inside the hero, untouched.
+        // Mobile inside layout v2 (2026-10-27): clean banner on top,
+        // everything below it on dark. Desktop keeps everything
+        // inside the hero, untouched.
         if (window.matchMedia('(max-width: 640px)').matches) {
             const hero = box.querySelector('.details-hero');
             const content = hero && hero.querySelector('.hero-content');
+            const chips = content && content.querySelector('.hero-chips');
+            const dTitle = content && content.querySelector('.hero-title');
+            const sub = content && content.querySelector('.hero-title-sub');
+            const genres = content && content.querySelector('.hero-genres');
             const syn = content && content.querySelector('.hero-synopsis');
             const acts = content && content.querySelector('.hero-actions');
-            if (syn && acts) {
+            const play = acts && acts.querySelector('.btn-play');
+            const mark = acts && acts.querySelector('button[onclick="App.markAllWatched()"]');
+            const trailer = acts && acts.querySelector('button[onclick="App.openTrailer()"]');
+            const libWrap = acts && acts.querySelector('.lib-wrap');
+            if (hero && content && chips && dTitle && syn && acts) {
                 const below = document.createElement('div');
                 below.className = 'details-below';
-                below.append(syn, acts);
+                const divider = document.createElement('div');
+                divider.className = 'details-divider';
+                const aboutH = document.createElement('div');
+                aboutH.className = 'details-about-h';
+                aboutH.textContent = 'About this anime';
+                below.append(chips, dTitle);
+                if (sub) below.append(sub);
+                if (genres) below.append(genres);
+                below.append(divider, aboutH, syn);
+                if (t.type !== 'Movie') {
+                    const nextLine = document.createElement('div');
+                    nextLine.className = 'details-next-ep';
+                    nextLine.textContent = '◷ Episode ' + nextEp + ' · ' + (watchedEps.length ? 'Continue watching' : 'Start watching');
+                    below.append(nextLine);
+                }
+                if (play) below.append(play);
+                const row = document.createElement('div');
+                row.className = 'details-btn-row';
+                if (libWrap) row.append(libWrap);
+                if (mark) {
+                    mark.textContent = allWatchedLocal ? '✓ All Watched' : 'Mark watched';
+                    row.append(mark);
+                }
+                if (trailer) { trailer.textContent = '🎬 Watch trailer'; row.append(trailer); }
+                below.append(row);
                 hero.after(below);
+                // Only the back button stays in the hero: clean banner.
+                content.remove();
             }
         }
     },
@@ -2502,8 +2539,11 @@ const App = {
         const watched = ((Storage.getWatched()[t.id] || {}).eps || []);
         const all = [];
         for (let n = 1; n <= total; n++) all.push(n);
-        const changed = watched.length !== all.length || all.some(n => !watched.includes(n));
-        if (changed) Storage.setWatchedEps(t.id, all, this.titleMeta(t));
+        // Toggle: everything watched -> unwatch it all, else mark all.
+        const allWatched = all.every(n => watched.includes(n));
+        const next = allWatched ? [] : all;
+        const changed = next.length !== watched.length || next.some(n => !watched.includes(n));
+        if (changed) Storage.setWatchedEps(t.id, next, this.titleMeta(t));
         if (changed) this.pushAnilistProgress(t);
         this.renderDetails();
     },
