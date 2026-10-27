@@ -859,6 +859,7 @@ const App = {
            profile card). */
         this.trackingLists = null;
         this.trackingListsAt = 0;
+        this.trackingCache = {};
         this.trackingError = '';
         this.settingsPage = 'account';
         this.applyTheme();
@@ -2857,6 +2858,7 @@ const App = {
                     d.results.anilist = { ok: true, msg: 'AniList — saved ✓' };
                     d.anilist.dirty = false;
                     this.trackingListsAt = 0;
+                    Object.values(this.trackingCache).forEach(e => { e.at = 0; });
                 } catch (e) {
                     d.results.anilist = { ok: false, msg: 'AniList — ' + ((e && e.message) || 'save failed') };
                 }
@@ -3913,7 +3915,7 @@ const App = {
                 expiresAt: Date.now() + 365 * 86400 * 1000,
                 user
             });
-            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.settingsPage = 'tracking';
             this._pendingOAuthLanding = true;
             this.fetchTrackingLists(true);
@@ -4066,7 +4068,7 @@ const App = {
                 // connected.
                 Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: null });
             }
-            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.settingsPage = 'tracking';
             this._pendingOAuthLanding = true;
             this.fetchTrackingLists(true);
@@ -4136,7 +4138,7 @@ const App = {
                 expiresAt: Date.now() + 365 * 86400 * 1000,
                 user
             });
-            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.closeModal();
             if (this.settingsPage === 'tracking') this.renderSettings();
             this.fetchTrackingLists(true).then(() => {
@@ -4152,7 +4154,7 @@ const App = {
         const conn = Storage.getAnilistConn() || {};
         // Keep only the client ID for an easy reconnect.
         Storage.saveAnilistConn({ clientId: conn.clientId || '' });
-        this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+        this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
 
@@ -4219,7 +4221,7 @@ const App = {
                 this.simklStopAutoPoll();
                 const user = await Trackers.simklViewer(clientId, token);
                 Storage.saveSimklConn({ clientId, accessToken: token, user });
-                this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+                this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
                 this.closeModal();
                 if (this.settingsPage === 'tracking') this.renderSettings();
                 this.fetchTrackingLists(true).then(() => {
@@ -4249,7 +4251,7 @@ const App = {
             if (!token) { this._skError('Not approved yet — approve the PIN on Simkl, then click Complete Connection again.'); return; }
             const user = await Trackers.simklViewer(clientId, token);
             Storage.saveSimklConn({ clientId, accessToken: token, user });
-            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.closeModal();
             if (this.settingsPage === 'tracking') this.renderSettings();
             this.fetchTrackingLists(true).then(() => {
@@ -4264,7 +4266,7 @@ const App = {
     simklDisconnect() {
         const conn = Storage.getSimklConn() || {};
         Storage.saveSimklConn({ clientId: conn.clientId || '' });
-        this.trackingLists = null; this.trackingListsAt = 0;
+        this.trackingLists = null; this.trackingListsAt = 0; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
 
@@ -4320,7 +4322,7 @@ const App = {
                the next login. */
             const prev = Storage.getMalConn();
             Storage.saveMalConn({ ...prev, clientId, user: { id: username, name: username, avatar: '' }, listsCache });
-            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = '';
+            this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.closeModal();
             if (this.settingsPage === 'tracking') this.renderSettings();
             this.fetchTrackingLists(true).then(() => {
@@ -4335,7 +4337,7 @@ const App = {
     malDisconnect() {
         const conn = Storage.getMalConn() || {};
         Storage.saveMalConn({ clientId: conn.clientId || '' });
-        this.trackingLists = null; this.trackingListsAt = 0;
+        this.trackingLists = null; this.trackingListsAt = 0; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
 
@@ -4354,6 +4356,11 @@ const App = {
     trackingListsAt: 0,
     trackingError: '',
     trackingFetch: null,
+    /* Per-provider memory: each tracker tab keeps its own last
+       load, so switching tabs shows instantly instead of
+       refetching (the displayed slot above still holds only the
+       current tab — everything else reads it unchanged). */
+    trackingCache: {},
     libraryFilter: 'ALL',
     librarySort: 'UPDATED_DESC',
     LIBRARY_SORTS: [
@@ -4448,23 +4455,39 @@ const App = {
                     const allMedia = [];
                     Object.values(lists).forEach(g => (g.entries || []).forEach(e => { if (e && e.media) allMedia.push(e.media); }));
                     this.cacheTitles(allMedia);
-                    this.trackingLists = lists;
-                    this.trackingListsProvider = active;
-                    this.trackingListsAt = Date.now();
+                    /* Per-provider memory: every loaded list is kept
+                       under its own provider. The displayed slot
+                       only takes the result when this fetch is still
+                       for the current tab — a tab switched mid-flight
+                       must not be clobbered by the old tab's late
+                       answer (the map keeps the late data anyway). */
+                    const now = Date.now();
+                    this.trackingCache[active] = { lists, at: now };
+                    if (this.activeTrackerName() === active) {
+                        this.trackingLists = lists;
+                        this.trackingListsProvider = active;
+                        this.trackingListsAt = now;
+                    }
                     this.trackingError = '';
-                } else if (!this.trackingError) {
+                } else if (!this.trackingError && !this.trackingLists) {
                     /* Never resolve silently: Library's skeleton
                        branch re-fetches on every null resolve, so a
                        silent null loops forever and starves the tab
                        (one-tap MAL has a token but no pasted
-                       listsCache, so it hit this every time). */
+                       listsCache, so it hit this every time).
+                       But a background refresh that fails while a
+                       previous list is on screen must not destroy
+                       it: the stale list stays, and the next switch
+                       retries the refresh. */
                     this.trackingError = active === 'MyAnimeList'
                         ? 'MAL lists load from the paste sync in Settings → Tracking (MAL does not answer browsers).'
                         : 'Could not load your ' + active + ' lists.';
                 }
                 return lists;
             } catch (e) {
-                this.trackingError = (e && e.message) || ('Could not load your ' + active + ' lists.');
+                /* Same stale rule as the null branch: a failed
+                   background refresh never wipes a displayed list. */
+                if (!this.trackingLists) this.trackingError = (e && e.message) || ('Could not load your ' + active + ' lists.');
                 return null;
             } finally {
                 this.trackingFetch = null;
@@ -4501,6 +4524,10 @@ const App = {
             try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress); } catch (e) { /* same */ }
         }
         this.trackingListsAt = 0;
+        /* Marks change tracker data, so every cached tab goes stale:
+           each one still shows instantly on next switch, then
+           refreshes in the background. */
+        Object.values(this.trackingCache).forEach(e => { e.at = 0; });
     },
 
     /* ---------- Library (Tracking stage) ---------- */
@@ -4571,7 +4598,24 @@ const App = {
             /* Same partial-overwrite bug as setCwSource — fixed
                the same way (merge one key, keep everything else). */
             Storage.updateSetting('librarySource', src);
-            if (this.trackingListsProvider !== src) { this.trackingLists = null; this.trackingListsAt = 0; }
+            if (this.trackingListsProvider !== src) {
+                /* Per-provider memory: a tab you already loaded
+                   shows instantly from its own cache instead of
+                   refetching. A cache older than 60 s still shows
+                   instantly, then refreshes in the background. */
+                const cached = this.trackingCache[src];
+                if (cached) {
+                    this.trackingLists = cached.lists;
+                    this.trackingListsAt = cached.at;
+                    this.trackingListsProvider = src;
+                    if (Date.now() - cached.at > 60000) {
+                        this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
+                    }
+                } else {
+                    this.trackingLists = null;
+                    this.trackingListsAt = 0;
+                }
+            }
         }
         this.renderLibrary();
     },
