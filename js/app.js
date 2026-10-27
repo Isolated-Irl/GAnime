@@ -2490,16 +2490,42 @@ const App = {
                 if (play) below.append(play);
                 const row = document.createElement('div');
                 row.className = 'details-btn-row';
-                if (libWrap) row.append(libWrap);
+                if (libWrap) {
+                    // Icon-only library button: the picked status's logo,
+                    // or a bookmark when the title is not in the library.
+                    // Tapping it still opens the status menu, as before.
+                    const libBtn = libWrap.querySelector('button');
+                    const libStatus = libEntry && libEntry.status;
+                    const bookmarkSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+                    if (libBtn) libBtn.innerHTML = libStatus ? this.statusIconSVG(libStatus) : bookmarkSVG;
+                    row.append(libWrap);
+                }
                 if (mark) {
-                    mark.textContent = allWatchedLocal ? '✓ All Watched' : 'Mark watched';
+                    // Icon-only tick: green while all watched, grey else.
+                    mark.textContent = '✓';
+                    mark.classList.toggle('is-watched', allWatchedLocal);
+                    mark.title = allWatchedLocal ? 'All watched — tap to unwatch' : 'Mark watched';
                     row.append(mark);
                 }
-                if (trailer) { trailer.textContent = '🎬 Watch trailer'; row.append(trailer); }
+                if (trailer) { trailer.textContent = '🎬'; row.append(trailer); }
                 below.append(row);
                 hero.after(below);
                 // Only the back button stays in the hero: clean banner.
                 content.remove();
+                // Full banner, never cut: swap the cropped background for
+                // a real image fitted to mobile width. Gradient fallback
+                // (no cover URL) keeps the old strip.
+                const bg = hero.style.backgroundImage || '';
+                const m = bg.match(/url\(['"]?(.*?)['"]?\)/);
+                if (m && m[1]) {
+                    const bannerImg = document.createElement('img');
+                    bannerImg.className = 'details-banner-img';
+                    bannerImg.src = m[1];
+                    bannerImg.alt = '';
+                    hero.style.backgroundImage = 'none';
+                    hero.classList.add('has-banner-img');
+                    hero.appendChild(bannerImg);
+                }
             }
         }
     },
@@ -2544,7 +2570,9 @@ const App = {
         const next = allWatched ? [] : all;
         const changed = next.length !== watched.length || next.some(n => !watched.includes(n));
         if (changed) Storage.setWatchedEps(t.id, next, this.titleMeta(t));
-        if (changed) this.pushAnilistProgress(t);
+        // Revert does not sync: unwatching stays local only, tracker
+        // progress is left alone. Marking still pushes, as before.
+        if (changed && next.length) this.pushAnilistProgress(t);
         this.renderDetails();
     },
 

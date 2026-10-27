@@ -1223,6 +1223,12 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
        everything below on dark — replaces the shrink row (v1).
        Desktop details untouched. */
     .details-hero { min-height: 200px; padding: 16px; }
+    /* Full banner (v3): a real image fitted to mobile width, nothing
+       cut — replaces the cropped background strip when present. */
+    .details-hero.has-banner-img { padding: 0; min-height: 0; }
+    .details-hero.has-banner-img .back-btn { position: absolute; top: 12px; left: 12px; z-index: 2; margin-bottom: 0; }
+    .details-hero.has-banner-img::after { display: none; }
+    .details-banner-img { width: 100%; height: auto; display: block; }
     .details-below { display: flex; flex-direction: column; padding: 16px; }
     .details-below .hero-chips { margin-bottom: 10px; }
     .details-below .hero-title { font-size: 30px; }
@@ -1235,8 +1241,12 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     .details-below .btn-play { width: 100%; padding: 15px; font-size: 16px; margin-top: 16px; justify-content: center; text-align: center; }
     .details-btn-row { display: flex; gap: 8px; margin-top: 12px; }
     .details-btn-row .lib-wrap { flex: 1; min-width: 0; }
-    .details-btn-row .btn-ghost { flex: 1; min-width: 0; padding: 12px 6px; font-size: 12.5px; justify-content: center; text-align: center; }
+    /* Icon-only minis (v3): no text labels, icons sized up. */
+    .details-btn-row .btn-ghost { flex: 1; min-width: 0; padding: 13px 6px; font-size: 21px; justify-content: center; text-align: center; }
+    .details-btn-row .btn-ghost svg { width: 22px; height: 22px; }
     .details-btn-row .lib-wrap .btn-ghost { width: 100%; }
+    /* All-watched state: green tick, reverting drops back to ghost. */
+    .details-btn-row .btn-ghost.is-watched { background: #22c55e; border-color: #22c55e; color: #fff; }
     /* Top-bar avatar pill (2026-10-27): the name hides on mobile but
        the chip kept its wide right padding, pushing the avatar left
        in its pill — symmetric padding centres it again. */
