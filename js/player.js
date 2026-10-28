@@ -609,10 +609,20 @@ const Player = {
 
     async open(url, label, streamObj) {
         if (!url || !/^https?:\/\//i.test(url)) return;
+        this._scrollY = window.scrollY;
         this.currentUrl = url;
         this.currentLabel = label || 'Stream';
         const overlay = document.getElementById('playerOverlay');
         if (!overlay) return;
+        /* Layout Phase 4: returning to the app (tab switch, app
+           switch) while the player is open can leave the fixed
+           layers misplaced the same way a close can — run the
+           same reset. Registered once; the currentUrl guard
+           makes it a no-op once the player is closed. */
+        if (!this._visHandler) {
+            this._visHandler = () => { if (!document.hidden && this.currentUrl) this._restoreLayout(); };
+            document.addEventListener('visibilitychange', this._visHandler);
+        }
         const settings = this._settings();
 
         /* Sync auto-fullscreen FIRST, before any await, while the
@@ -1728,5 +1738,28 @@ const Player = {
         }
         this.currentUrl = '';
         this._skipIntervals = [];
+        this._restoreLayout();
+    },
+
+    /* Layout Phase 4: defensive reset for the return from the
+       player. exitFullscreen() finishes asynchronously, so the
+       viewport can change AFTER the overlay is gone and leave
+       the fixed layers (top bar, nav, FAB) misplaced; the
+       orientation may also stay locked and the scroll position
+       lost. Run the fix on the next frame, again on the
+       fullscreenchange that follows, and once more after 400ms
+       so every ordering lands. */
+    _restoreLayout() {
+        const y = this._scrollY || 0;
+        const fix = () => {
+            try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+            document.documentElement.classList.remove('gp-pfs-lock');
+            window.dispatchEvent(new Event('resize'));
+            void document.body.offsetHeight;
+            window.scrollTo(0, y);
+        };
+        requestAnimationFrame(fix);
+        if (document.fullscreenElement) document.addEventListener('fullscreenchange', () => setTimeout(fix, 50), { once: true });
+        setTimeout(fix, 400);
     }
 };

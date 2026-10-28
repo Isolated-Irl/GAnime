@@ -140,7 +140,7 @@ body.amoled-black { --bg-surface: #000000; --bg-elevated: #000000; --bg-card: #0
     font-size: 30px; font-weight: 800; color: #ffffff;
     border: 3px solid transparent;
 }
-.profile-card:hover .profile-avatar { border-color: var(--accent); }
+@media (hover:hover) { .profile-card:hover .profile-avatar { border-color: var(--accent); } }
 .profile-avatar.small { width: 40px; height: 40px; font-size: 17px; }
 .profile-avatar.add-avatar { background: var(--bg-card); color: var(--text-secondary); font-size: 34px; }
 .profile-name { font-size: 14px; font-weight: 600; }
@@ -491,12 +491,12 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     font-size: 19px; font-weight: 700; line-height: 1;
     display: flex; align-items: center; justify-content: center;
 }
-.seeall-arrow:hover { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+@media (hover:hover) { .seeall-arrow:hover { color: var(--on-accent); background: var(--accent); border-color: var(--accent); } }
 .viewall-link {
     background: none; border: none; cursor: pointer; flex: none;
     color: var(--text-secondary); font-size: 13px; font-weight: 700;
 }
-.viewall-link:hover { color: var(--accent); }
+@media (hover:hover) { .viewall-link:hover { color: var(--accent); } }
 
 /* ============================================================
    FULL MIRROR ADDITIONS — filter bar, hover panel,
@@ -551,7 +551,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     color: var(--text-secondary); font-size: 14px; font-weight: 600;
     padding: 9px 10px; border-radius: 8px;
 }
-.fopt:hover { background: var(--focus-bg); color: var(--text-primary); }
+@media (hover:hover) { .fopt:hover { background: var(--focus-bg); color: var(--text-primary); } }
 .fopt.on { color: var(--accent); background: var(--focus-bg); }
 .tag-filter-input { margin-bottom: 12px; }
 .active-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
@@ -612,7 +612,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     border: 1px solid var(--border-medium); font-size: 20px; font-weight: 700; line-height: 1;
     display: flex; align-items: center; justify-content: center;
 }
-.cal2-arrow:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+@media (hover:hover) { .cal2-arrow:hover { background: var(--accent); color: var(--on-accent); border-color: var(--accent); } }
 .cal2-range { font-size: 15px; font-weight: 800; }
 .cal2-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
 .cal2-day {
@@ -728,7 +728,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-primary);
     border-radius: var(--radius-pill); padding: 9px 16px; font-size: 14px; font-weight: 700;
 }
-.ftab:hover { border-color: rgba(255, 255, 255, 0.35); }
+@media (hover:hover) { .ftab:hover { border-color: rgba(255, 255, 255, 0.35); } }
 .ftab.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .stream-group { margin-bottom: 22px; }
 .stream-group-head { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 800; margin-bottom: 10px; }
@@ -833,7 +833,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     background: transparent; border: none; color: var(--text-primary);
     padding: 8px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer;
 }
-.ep-menu-row:hover { background: rgba(255, 255, 255, 0.07); }
+@media (hover:hover) { .ep-menu-row:hover { background: rgba(255, 255, 255, 0.07); } }
 .ep-menu-row.on { background: rgba(255, 255, 255, 0.05); }
 .ep-menu-prev { width: 54px; height: 32px; border-radius: 6px; flex: none; position: relative; overflow: hidden; border: 1px solid var(--border-subtle); }
 .ep-menu-epb {
@@ -848,7 +848,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
 /* Design 1 — Minimal: picture only, EP + date inside */
 .ep-pic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(218px, 1fr)); gap: 12px; }
 .ep-pic { aspect-ratio: 16 / 9; border-radius: 12px; position: relative; border: 1px solid var(--border-subtle); cursor: pointer; overflow: hidden; }
-.ep-pic:hover { border-color: rgba(255, 255, 255, 0.45); }
+@media (hover:hover) { .ep-pic:hover { border-color: rgba(255, 255, 255, 0.45); } }
 .ep-badge {
     position: absolute; left: 10px; bottom: 10px;
     background: rgba(16, 18, 24, 0.87); border: 1.6px solid #ffffff; color: #ffffff;
@@ -869,7 +869,7 @@ input[type="range"].setting-range { flex: 1; max-width: 300px; accent-color: var
     display: flex; align-items: center; justify-content: center;
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
 }
-.ep-eye:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.7); }
+@media (hover:hover) { .ep-eye:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.7); } }
 .ep-eye.on { background: #2fbf71; border-color: #2fbf71; color: #ffffff; }
 
 /* Design 2 — Detailed: big cards strip */
@@ -954,7 +954,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     transform: rotate(-90deg);
     transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.tb-brand:hover .tb-fold { transform: rotate(0deg); transition: transform 0.9s cubic-bezier(0.4, 0, 0.2, 1); }
+@media (hover:hover) { .tb-brand:hover .tb-fold { transform: rotate(0deg); transition: transform 0.9s cubic-bezier(0.4, 0, 0.2, 1); } }
 .tb-nime {
     font-size: 19px; font-weight: 800; letter-spacing: 0.2px;
     background: linear-gradient(90deg, var(--accent-secondary), var(--accent) 55%, color-mix(in srgb, var(--accent) 62%, #ffffff));
@@ -1073,7 +1073,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     color: #fff; font-size: 12.5px; font-weight: 600; cursor: pointer;
     border-radius: 999px; padding: 5px 12px;
 }
-.gpill:hover { background: rgba(255,255,255,0.26); }
+@media (hover:hover) { .gpill:hover { background: rgba(255,255,255,0.26); } }
 .justified { text-align: justify; }
 .lib-wrap { position: relative; }
 .lib-menu {
@@ -1085,7 +1085,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
     color: var(--text-primary); font-size: 13.5px; font-weight: 600; padding: 9px 11px; border-radius: 8px;
 }
-.lib-menu-row:hover { background: var(--focus-bg); }
+@media (hover:hover) { .lib-menu-row:hover { background: var(--focus-bg); } }
 .lib-menu-row.active { color: var(--accent); }
 .lib-menu-row.danger { color: #f87171; }
 .trailer-frame { position: relative; padding-top: 56.25%; border-radius: 12px; overflow: hidden; margin-bottom: 14px; background: #000; }
@@ -1100,7 +1100,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
     display: flex; align-items: center; justify-content: center;
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
 }
-.ep-save:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.7); }
+@media (hover:hover) { .ep-save:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.7); } }
 .ep-save.on { background: #b98a1c; border-color: #e8b93c; color: #ffffff; }
 
 /* --- Library header + sources row (Fix 2) --- */
@@ -1285,7 +1285,7 @@ body.hero-card-mode .hero, body.hero-card-mode .details-hero { margin: 16px 16px
 .nav-tab.active { background: var(--accent-surface); }
 .floating-pill-nav { border-color: var(--accent-border-subtle); box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55), 0 0 20px var(--accent-glow); }
 .stream-card.is-direct { background: linear-gradient(90deg, var(--accent-surface) 0%, var(--bg-card) 20%); }
-.btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-surface); }
+@media (hover:hover) { .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-surface); } }
 .wavy-fill, .progress-fill { box-shadow: 0 0 8px var(--accent-glow); }
 
 /* Splash skip (2026-10-24): pre-paint class hides the splash before
@@ -1333,4 +1333,62 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
     .streams-head-tools { flex-basis: 100%; margin-left: 0; }
     .stream-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
     .stream-tabs::-webkit-scrollbar { display: none; }
+}
+
+/* ============================================================
+   Layout Phase 1 — viewport + safe areas (2026-10-28).
+   Android Chrome's 100vh includes the URL-bar area, and the
+   installed PWA / fullscreen has a gesture bar + cutout, so:
+   dvh with a vh fallback, viewport-fit=cover in index.html,
+   and env(safe-area-inset-*) on every fixed edge. Appended
+   last so these beat the earlier same-specificity rules.
+   Scrollbars stay hidden (unchanged policy). */
+body { min-height: 100vh; min-height: 100dvh; overscroll-behavior-y: contain; }
+.player-video { max-height: calc(100vh - 70px); max-height: calc(100dvh - 70px); }
+.modal-card, .modal-backdrop { overscroll-behavior: contain; }
+.top-bar { height: calc(54px + env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); }
+.app-viewport { padding-top: calc(54px + env(safe-area-inset-top, 0px)); }
+.app-viewport.nav-top-pad { padding-top: calc(54px + var(--nav-height) + 24px + env(safe-area-inset-top, 0px)); }
+.floating-pill-nav.pos-bottom { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+.floating-pill-nav.pos-top { top: calc(66px + env(safe-area-inset-top, 0px)); }
+.lib-fab-wrap { bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+
+/* ============================================================
+   Layout Phase 2 — touch (2026-10-28).
+   Bigger hit areas WITHOUT bigger visuals (::after extends
+   the tap zone past the visible button); the pill nav shrinks
+   instead of overflowing small phones; sticky hover on touch
+   is killed for stream cards (other hover-only rules are
+   wrapped in @media (hover:hover) in place, below). */
+.floating-pill-nav { max-width: calc(100vw - 16px); }
+.nav-tab { flex: 1 1 0; min-width: 44px; }
+.hero-dot { position: relative; }
+.ep-eye::after, .ep-save::after, .hero-dot::after { content: ""; position: absolute; inset: -10px; }
+.btn-mini { min-height: 40px; }
+@media (hover: none) { .stream-card:hover { transform: none; } }
+
+/* ============================================================
+   Layout Phase 3 — calendar skeletons (2026-10-28).
+   The Calendar never shows fake titles: while live data loads
+   it renders pulsing skeleton rows, and the day counts read '-'
+   until real data exists. */
+.cal2-skel { pointer-events: none; }
+.cal2-skel .cal2-thumb, .skl-line { background: var(--bg-elevated); animation: sklPulse 1.2s ease-in-out infinite; }
+.skl-line { height: 12px; border-radius: 6px; margin: 6px 0; }
+.skl-line.w70 { width: 70%; }
+.skl-line.w40 { width: 40%; }
+@keyframes sklPulse { 50% { opacity: .45; } }
+
+/* ============================================================
+   Layout Phase 6 — phone landscape (2026-10-28).
+   At ~360px tall, a 300px hero + top bar + nav leaves almost
+   no content: shrink the hero, drop the nav labels to icons,
+   and tuck the nav closer to the bottom edge. The #homeHero
+   selector ties the mobile 600px hero rule and wins by coming
+   later; the plain .hero rule covers every other hero. */
+@media (max-height: 480px) and (orientation: landscape) {
+    .hero { min-height: 220px; }
+    #homeHero .hero { min-height: 220px; }
+    .nav-tab span { display: none; }
+    .floating-pill-nav.pos-bottom { bottom: 6px; }
 }

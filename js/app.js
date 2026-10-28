@@ -39,6 +39,7 @@ const App = {
         try { Tracker.startOutboxWorker(); } catch (e) {}
         this.bindTouchLongPress();
         this.bindHoverDismiss();
+        this.bindRailWheel();
         this.bindHashRouting();
         this.handleOAuthCallback();
         /* Background token refresh (audit bundle, Phase 2-ready):
@@ -146,6 +147,33 @@ const App = {
         window.addEventListener('wheel', () => this.hoverOut(), { passive: true });
         window.addEventListener('blur', () => this.hoverOut());
         document.addEventListener('mousedown', () => this.hoverOut(), { passive: true });
+    },
+
+    /* Layout Phase 6: desktop mouse wheels on the horizontal
+       rails. Scrollbars stay hidden, so a plain wheel over a
+       rail would do nothing — convert vertical wheel motion
+       into horizontal scroll, but only when the row actually
+       overflows, only for vertical-dominant motion (a
+       trackpad's own horizontal scroll is left alone), and
+       never inside the player overlay (its wheel trap owns
+       that surface). Delegated: rails render and re-render
+       constantly. passive:false is what makes preventDefault
+       (no page scroll while railing) legal. */
+    bindRailWheel() {
+        if (this._railWheelBound) return;
+        this._railWheelBound = true;
+        document.addEventListener('wheel', ev => this._railWheel(ev), { passive: false });
+    },
+
+    _railWheel(ev) {
+        if (!ev || !ev.target || !ev.target.closest) return;
+        if (ev.target.closest('#playerOverlay')) return;
+        if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) return;
+        if (!ev.deltaY) return;
+        const row = ev.target.closest('.rail-row, .ep-scroll');
+        if (!row || row.scrollWidth <= row.clientWidth) return;
+        row.scrollLeft += ev.deltaY;
+        if (ev.preventDefault) ev.preventDefault();
     },
 
     /* Touch long-press on poster cards (Fix 12): the mobile
@@ -761,15 +789,15 @@ const App = {
         this.renderHome();
         this.renderTopBar();
         this.shellLaunched = true;
-        /* OAuth landing (audit bundle): if the AniList callback
-           finished during the splash, boot restored Home and the
-           connection was saved with no landing. A pending flag
-           set by handleOAuthCallback() sends the user to
-           Profile → Tracking instead. */
+        /* OAuth landing (Layout Phase 5): a pending flag set by
+           handleOAuthCallback() returns the user to where they
+           were before the sign-in redirect (or Profile →
+           Tracking when nothing was stashed). The flag clears
+           here, and _landAfterOAuth consumes the stash, so a
+           later profile switch can never jump by surprise. */
         if (this._pendingOAuthLanding) {
             this._pendingOAuthLanding = false;
-            this.settingsPage = 'tracking';
-            this.navigate('screen-profile');
+            this._landAfterOAuth();
             return;
         }
         /* toHome (manual profile tap) = fresh start at Home.
@@ -1001,21 +1029,12 @@ const App = {
     shellLaunched: false,
 
     /* ---------- Calendar: day strip + week navigation + row list ---------- */
-    calPool: null,        // live entries grouped by JS weekday; null = sample pool
+    calPool: null,        // live entries grouped by JS weekday; null = no data yet (skeletons)
     calLoading: false,      // a calendar fetch is in flight (prevents dupes)
+    _calStale: false,       // cached pool older than 30min — show it, refresh behind it
     calFailed: false,       // last calendar fetch failed — tab visits retry, footer offers Retry
     calWeekOffset: 0,     // 0 = this week, -1 = last week, +1 = next week…
     calSelectedIdx: null, // 0 = Monday … 6 = Sunday (defaults to today)
-
-    calSamplePool() {
-        const pool = {};
-        Object.keys(Config.SAMPLE_SCHEDULE).forEach(k => {
-            pool[k] = Config.SAMPLE_SCHEDULE[k].map(e => ({
-                name: e.title, sub: e.ep + ' · ' + e.time, hue: e.hue, poster: '', id: '', minutes: 0
-            }));
-        });
-        return pool;
-    },
 
     renderCalendar() {
         const root = document.getElementById('calendarRoot');
@@ -1029,16 +1048,24 @@ const App = {
         sunday.setDate(monday.getDate() + 6);
         const rangeLabel = monday.toLocaleString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
             sunday.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        /* Same pattern as Home: a cached pool restores instantly
-           (zero requests on refresh); a failed pool retries on
-           every tab visit instead of staying sample forever. */
+        /* Layout Phase 3: the calendar cache lives in localStorage
+           (v2, with a timestamp) so a new session still opens
+           instantly. Up to 6h old is accepted; older than 30min
+           shows immediately and refreshes behind it (_calStale).
+           A failed pool retries on every tab visit. */
         if (!this.calPool) {
             try {
-                const cachedCal = JSON.parse(sessionStorage.getItem('ganime_cal_pool') || 'null');
-                if (cachedCal && typeof cachedCal === 'object' && Object.keys(cachedCal).length) this.calPool = cachedCal;
+                const raw = JSON.parse(localStorage.getItem('ganime_cal_pool_v2') || 'null');
+                if (raw && raw.pool && typeof raw.pool === 'object') {
+                    const age = Date.now() - (raw.at || 0);
+                    if (age <= 6 * 3600 * 1000) {
+                        this.calPool = raw.pool;
+                        this._calStale = age > 30 * 60 * 1000;
+                    }
+                }
             } catch (e) { /* corrupt cache — fetch fresh below */ }
         }
-        const pool = this.calPool || this.calSamplePool();
+        const pool = this.calPool || {};
         const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
         const strip = dayNames.map((name, i) => {
@@ -1051,14 +1078,24 @@ const App = {
                 <button class="cal2-day ${i === this.calSelectedIdx ? 'selected' : ''} ${isToday ? 'is-today' : ''}" onclick="App.calSelect(${i})">
                     <span class="cal2-day-name">${name}</span>
                     <span class="cal2-day-date">${date.getDate()}</span>
-                    <span class="cal2-day-count">${count ? count + (count === 1 ? ' show' : ' shows') : '—'}</span>
+                    <span class="cal2-day-count">${!this.calPool ? '-' : (count ? count + (count === 1 ? ' show' : ' shows') : '—')}</span>
                 </button>`;
         }).join('');
 
         const selectedDate = new Date(monday);
         selectedDate.setDate(monday.getDate() + this.calSelectedIdx);
         const entries = (pool[selectedDate.getDay()] || []).slice().sort((a, b) => (a.minutes || 0) - (b.minutes || 0));
-        const rows = entries.length ? entries.map(e => `
+        /* Layout Phase 3: no fake titles, ever. No pool + no
+           failure = still loading -> skeletons. No pool +
+           failure = no rows (the footer carries the error +
+           Retry). A pool with an empty day = the honest
+           "No releases" line. */
+        const skelRow = `<div class="cal2-row cal2-skel"><div class="cal2-thumb"></div><div class="cal2-info"><div class="skl-line w70"></div><div class="skl-line w40"></div></div></div>`;
+        let rows;
+        if (!this.calPool && !this.calFailed) {
+            rows = skelRow + skelRow + skelRow + skelRow;
+        } else if (entries.length) {
+            rows = entries.map(e => `
             <div class="cal2-row" ${e.id ? `onclick="App.openDetails('${e.id}')"` : ''}>
                 <div class="cal2-thumb" ${e.id ? `onmouseenter="App.hoverIn(this,'${e.id}')" onmouseleave="App.hoverOut()"` : ''}
                     style="background:linear-gradient(150deg, hsl(${e.hue} 65% 42%), hsl(${e.hue + 40} 70% 26%))">${this._safeImgUrl(e.poster) ? `<img class="cal-poster-img" src="${this._safeImgUrl(e.poster)}" alt="" loading="lazy">` : `<span>${e.name.charAt(0)}</span>`}</div>
@@ -1067,8 +1104,12 @@ const App = {
                     <div class="cal2-sub">${this.esc(e.sub)}</div>
                 </div>
                 <span class="cal2-chevron">›</span>
-            </div>`).join('')
-            : '<div class="cal-none">No releases this day in the current data.</div>';
+            </div>`).join('');
+        } else if (!this.calPool) {
+            rows = '';
+        } else {
+            rows = '<div class="cal-none">No releases this day in the current data.</div>';
+        }
 
         root.innerHTML = `
             <div class="panel-title">Anime Release Calendar</div>
@@ -1079,15 +1120,15 @@ const App = {
                 ${this.calWeekOffset !== 0 ? '<button class="btn-mini" onclick="App.calToday()">Today</button>' : ''}
             </div>
             <div class="cal2-strip">${strip}</div>
-            <div class="section-label" style="margin-top:18px">${selectedDate.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}${this.calPool ? ' · LIVE FROM ANILIST' : ' · SAMPLE'}</div>
+            <div class="section-label" style="margin-top:18px">${selectedDate.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}${this.calPool ? ' · LIVE FROM ANILIST' : ''}</div>
             <div class="cal2-rows">${rows}</div>
             ${this.calPool
                 ? ''
                 : (this.calFailed
-                    ? `<p class="text-secondary" style="margin-top:14px">Live data couldn't load — AniList may be rate-limiting. Showing the sample schedule for now.</p>
+                    ? `<p class="text-secondary" style="margin-top:14px">Couldn't load the live schedule - AniList may be rate-limiting.</p>
                        <button class="btn-primary" style="max-width:220px; margin-top:6px" onclick="App.retryCalendar()">↻ Retry Live Calendar</button>`
-                    : `<p class="text-secondary" style="margin-top:14px">Sample schedule — live AniList data is loading…</p>`)}`;
-        if (!this.calPool && !this.calLoading) {
+                    : '')}`;
+        if ((!this.calPool || this._calStale) && !this.calLoading) {
             this.loadLiveCalendar();
         }
     },
@@ -1115,6 +1156,10 @@ const App = {
 
     async loadLiveCalendar() {
         if (this.calLoading) return;
+        /* Layout Phase 3: a refresh clears the stale flag up
+           front — a failed refresh simply leaves the shown pool
+           as-is (no error banner over cached data). */
+        this._calStale = false;
         this.calLoading = true;
         try {
             const shows = await AniList.airing(50);
@@ -1136,19 +1181,19 @@ const App = {
             /* Success counts even if nothing had a next episode:
                an empty (truthy) pool stops renderCalendar from
                refetching on every nav click. Only non-empty pools
-               are session-cached, so an empty one never blocks a
-               fresh fetch next session. */
+               are persisted, so an empty one never blocks a fresh
+               fetch next session; the v2 cache carries a
+               timestamp for the 6h / 30min rules. */
             this.calPool = grouped;
             this.calFailed = false;
             if (Object.keys(grouped).length) {
-                try { sessionStorage.setItem('ganime_cal_pool', JSON.stringify(grouped)); } catch (e) {}
+                try { localStorage.setItem('ganime_cal_pool_v2', JSON.stringify({ at: Date.now(), pool: grouped })); } catch (e) {}
             }
             this.renderCalendar();
         } catch (e) {
-            /* Old code swallowed this silently AND calLoaded was
-               already true, so a rate-limited first attempt meant
-               sample schedule forever. Now the footer offers Retry
-               and the next tab visit retries automatically. */
+            /* No pool -> skeletons give way to the error text +
+               Retry; a cached pool stays on screen untouched and
+               the next tab visit retries automatically. */
             this.calFailed = true;
             this.renderCalendar();
         } finally {
@@ -1323,6 +1368,7 @@ const App = {
     posterCardHTML(t, badgeHTML) {
         return `
             <div class="poster-card" data-tid="${t.id}" onclick="App.openDetails('${t.id}')"
+                tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();App.openDetails('${t.id}');}"
                 onmouseenter="App.hoverIn(this,'${t.id}')" onmouseleave="App.hoverOut()">
                 ${this.posterArt(t, '', badgeHTML)}
                 <div class="poster-title">${this.esc(t.title)}</div>
@@ -4077,6 +4123,59 @@ const App = {
        back with the token in the URL hash, finish the login
        automatically — true zero-typing. On file:// the PIN-page
        paste flow below is used instead. */
+    /* Layout Phase 5: remember where the user was before the
+       tracker sign-in redirect, so the return lands back there
+       instead of always on Settings → Tracking. sessionStorage
+       survives the same-tab redirect; the key is read-and-
+       removed on landing, so a later profile switch can never
+       be hijacked by a stale stash (item 16's fix). */
+    _stashOAuthReturn() {
+        const stash = {
+            currentScreen: this.currentScreen,
+            settingsPage: this.settingsPage,
+            settingsParent: this.settingsParent,
+            mobileSettings: this.mobileSettings,
+            librarySourceTab: this.librarySourceTab,
+        };
+        if (this.currentScreen === 'screen-details' && this.currentTitleId) stash.detailsId = this.currentTitleId;
+        if (this.currentScreen === 'screen-streams' && this.streamsState && this.streamsState.titleId) {
+            stash.streams = { id: this.streamsState.titleId, ep: this.streamsState.episode || null };
+        }
+        try { window.sessionStorage.setItem('ganime_oauth_return', JSON.stringify(stash)); } catch (e) {}
+    },
+
+    _landAfterOAuth() {
+        let saved = null;
+        try { saved = JSON.parse(window.sessionStorage.getItem('ganime_oauth_return') || 'null'); } catch (e) { saved = null; }
+        try { window.sessionStorage.removeItem('ganime_oauth_return'); } catch (e) {}
+        if (!saved) {
+            /* No stash (an old redirect, or a return without one):
+               fall back to the old landing — Profile → Tracking. */
+            this.settingsPage = 'tracking';
+            this.settingsParent = 'tracking';
+            this.mobileSettings = 'tracking';
+            this.navigate('screen-profile');
+            this.renderSettings();
+            return;
+        }
+        if (saved.detailsId) { this.openDetails(saved.detailsId); return; }
+        if (saved.streams) { this.openStreams(saved.streams.id, saved.streams.ep); return; }
+        if (saved.currentScreen === 'screen-home' || saved.currentScreen === 'screen-search' ||
+            saved.currentScreen === 'screen-calendar' || saved.currentScreen === 'screen-library') {
+            if (saved.currentScreen === 'screen-library' && saved.librarySourceTab) this.setLibrarySource(saved.librarySourceTab);
+            this.navigate(saved.currentScreen);
+            return;
+        }
+        /* Otherwise: back into Settings — the section left, or
+           Tracking when nothing was stored. mobileSettings is
+           what keeps a phone out of the menu view (item 14). */
+        this.settingsPage = saved.settingsPage || 'tracking';
+        this.settingsParent = saved.settingsParent || 'tracking';
+        this.mobileSettings = saved.mobileSettings || saved.settingsParent || 'tracking';
+        this.navigate('screen-profile');
+        this.renderSettings();
+    },
+
     async handleOAuthCallback() {
         /* Simkl / MAL one-tap return: ?provider=simkl|mal&code=&state=.
            The code is single-use, so strip the query first, then
@@ -4125,19 +4224,12 @@ const App = {
                 user
             });
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
-            this.settingsPage = 'tracking';
-            this._pendingOAuthLanding = true;
             this.fetchTrackingLists(true);
             /* Late landing: if the shell already launched (slow
-               viewer fetch), go to Profile → Tracking now. */
-            if (this.shellLaunched && this.currentScreen !== 'screen-profile') this.navigate('screen-profile');
-            /* Boot race (2026-10-25 final, honest scope): the token is
-               already stripped from the hash by replaceState above, so
-               it cannot be wiped by syncHash. The only real race is
-               the Settings page not re-rendering if boot already
-               proceeded — re-render it if it is the current screen.
-               Do NOT pre-mark the user signed-in before viewer() resolves. */
-            if (this.shellLaunched && this.currentScreen === 'screen-profile' && typeof this.renderSettings === 'function') this.renderSettings();
+               viewer fetch), return to where the user left; if
+               boot is still ahead, the boot block lands them
+               once the shell exists. */
+            if (this.shellLaunched) this._landAfterOAuth(); else this._pendingOAuthLanding = true;
         } catch (e) { /* a bad hash token just means: use the paste flow */ }
     },
 
@@ -4150,6 +4242,7 @@ const App = {
         const cid = (Config.OAUTH && Config.OAUTH.ANILIST_CLIENT_ID) || (Storage.getAnilistConn() || {}).clientId || '';
         if (!cid) { this.openAnilistConnect(); return; }
         if (window.location.protocol !== 'file:') {
+            this._stashOAuthReturn();
             window.location.href = AniList.authorizeUrl(cid);
             return;
         }
@@ -4235,6 +4328,7 @@ const App = {
         const challenge = await this._pkceS256Challenge(verifier);
         if (!challenge) { this.openSimklConnect(); return; }
         try { window.sessionStorage.setItem('ganime_oauth_simkl', JSON.stringify({ state, verifier })); } catch (e) { /* private mode: state check skipped */ }
+        this._stashOAuthReturn();
         window.location.href = this._simklAuthorizeUrl(cid, this._oauthRedirect('simkl'), state, challenge);
     },
 
@@ -4245,6 +4339,7 @@ const App = {
         const state = this._randomOAuthString(32);
         const verifier = this._randomOAuthString(128);
         try { window.sessionStorage.setItem('ganime_oauth_mal', JSON.stringify({ state, verifier })); } catch (e) { /* private mode: state check skipped */ }
+        this._stashOAuthReturn();
         window.location.href = this._malAuthorizeUrl(cid, this._oauthRedirect('mal'), verifier, state);
     },
 
@@ -4285,11 +4380,8 @@ const App = {
                 Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: malUser });
             }
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
-            this.settingsPage = 'tracking';
-            this._pendingOAuthLanding = true;
             this.fetchTrackingLists(true);
-            if (this.shellLaunched && this.currentScreen !== 'screen-profile') this.navigate('screen-profile');
-            if (this.shellLaunched && this.currentScreen === 'screen-profile' && typeof this.renderSettings === 'function') this.renderSettings();
+            if (this.shellLaunched) this._landAfterOAuth(); else this._pendingOAuthLanding = true;
         } catch (e) {
             /* Show the failure: a silent miss here would look like
                "nothing happened" on return, hiding a relay/config bug. */
@@ -5686,6 +5778,26 @@ const App = {
 
     /* ---------- Theme / settings effects ---------- */
     applyTheme() {
+        /* Layout Phase 2: weak devices default to glass-off, but
+           ONLY when the user never chose a value. getSettings()
+           merges defaults (liquidGlassTab: true), so "never
+           chosen" must be read from the raw saved object — a
+           missing key means never chosen. Once this writes
+           false, the key exists and the default never re-applies,
+           so the user's own toggle always wins. Skipped with no
+           active profile (no settings file yet); a later
+           applyTheme call, after a profile exists, picks it up.
+           navigator.deviceMemory / hardwareConcurrency may be
+           undefined (then the comparison is false, not weak). */
+        try {
+            const pid = Storage.getActiveProfileId();
+            if (pid) {
+                const raw = Storage._read(Storage._settingsKey(pid), {});
+                if (raw && !('liquidGlassTab' in raw) && (navigator.deviceMemory <= 4 || navigator.hardwareConcurrency <= 4)) {
+                    Storage.updateSetting('liquidGlassTab', false, pid);
+                }
+            }
+        } catch (e) {}
         const settings = Storage.getSettings();
         const preset = Config.ACCENT_PRESETS.find(p => p.id === settings.accentId) || Config.ACCENT_PRESETS[0];
         document.documentElement.style.setProperty('--accent', preset.color);

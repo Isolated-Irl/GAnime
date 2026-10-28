@@ -68,19 +68,6 @@ const Config = {
         { name: 'Alien', emoji: '👽', bg: '#aed581' }
     ],
 
-    // SAMPLE weekly release schedule for the Calendar screen (placeholder
-    // titles/times — real airing data replaces this in the AniList step).
-    // Keyed by JS weekday: 0 = Sunday ... 6 = Saturday.
-    SAMPLE_SCHEDULE: {
-        0: [ { title: 'One Piece', ep: 'EP 1150', time: '09:30 AM', hue: 8 }, { title: 'Solo Leveling', ep: 'EP 9', time: '11:30 PM', hue: 262 } ],
-        1: [ { title: 'Bleach: Thousand-Year Blood War', ep: 'EP 12', time: '11:30 PM', hue: 210 } ],
-        2: [ { title: 'Cyberpunk: Edgerunners 2', ep: 'EP 4', time: '10:00 PM', hue: 318 } ],
-        3: [ { title: 'Frieren: Beyond Journey\u2019s End', ep: 'EP 18', time: '11:00 PM', hue: 160 }, { title: 'The Apothecary Diaries', ep: 'EP 20', time: '10:30 PM', hue: 96 } ],
-        4: [ { title: 'Jujutsu Kaisen', ep: 'EP 15', time: '11:56 PM', hue: 275 } ],
-        5: [ { title: 'Spy x Family', ep: 'EP 11', time: '11:00 PM', hue: 340 }, { title: 'Chainsaw Man', ep: 'EP 7', time: '09:00 PM', hue: 24 } ],
-        6: [ { title: 'Demon Slayer', ep: 'EP 6', time: '11:15 PM', hue: 190 }, { title: 'My Happy Marriage', ep: 'Special', time: '08:00 PM', hue: 350 } ]
-    },
-
     // SAMPLE catalog for Home / Details (Stage 4). Placeholder meta + gradient
     // poster art — the AniList step replaces all of this with real data.
     SAMPLE_TITLES: [
