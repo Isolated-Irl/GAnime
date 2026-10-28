@@ -23,12 +23,12 @@ const Storage = {
         try {
             localStorage.setItem(key, JSON.stringify(value));
         } catch (e) {
-            /* Quota: the episode cache is the bulkiest, most
-               disposable store — evict it and retry once. */
-            try {
-                if (key !== 'ganime_epdata') localStorage.removeItem('ganime_epdata');
-                localStorage.setItem(key, JSON.stringify(value));
-            } catch (e2) { /* storage full/blocked — session stays usable */ }
+            /* Quota failure: NEVER evict another store silently.
+               An old version deleted ganime_epdata here, wiping
+               the episode cache to save an unrelated write. Log
+               and continue — the session stays usable, only this
+               write is lost. */
+            try { console.warn('[GAnime] storage write failed for ' + key + ': ' + (e && e.message)); } catch (e2) {}
         }
         /* Phase 2 cloud sync (2026-10-26): user-data writes mark
            the store dirty so Sync pushes a batched copy after a
@@ -406,7 +406,16 @@ const Storage = {
     },
     saveMalConn(conn, profileId) {
         const all = this.getTracking(profileId);
-        if (conn) all.mal = conn; else delete all.mal;
+        if (conn) {
+            /* Tracker layer Phase 1: the list cache lives in
+               TrackStore now, never in the token blob — strip it
+               here so no call site can re-inflate the blob by
+               spreading an old conn (the blob rewrite on every
+               fetch was eating token refreshes on quota errors). */
+            const clean = { ...conn };
+            delete clean.listsCache;
+            all.mal = clean;
+        } else delete all.mal;
         this.saveTracking(all, profileId);
     },
 

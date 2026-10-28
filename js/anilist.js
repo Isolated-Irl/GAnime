@@ -99,7 +99,13 @@ const AniList = {
             format: m.format || '',
             status: m.status || '',
             studio,
-            poster: (m.coverImage && (m.coverImage.extraLarge || m.coverImage.large)) || '',
+            /* Tracker layer Phase 4: grid cards use the lighter
+               large poster (hundreds of cards — extraLarge for
+               every tile was pure bandwidth); the extraLarge
+               variant rides as posterXL for the one-at-a-time big
+               displays (mobile hero art, Details fallbacks). */
+            poster: (m.coverImage && (m.coverImage.large || m.coverImage.extraLarge)) || '',
+            posterXL: (m.coverImage && (m.coverImage.extraLarge || m.coverImage.large)) || '',
             cover: m.bannerImage || (m.coverImage && m.coverImage.extraLarge) || '',
             synopsis: this._cleanDesc(m.description),
             genres: m.genres || [],
@@ -254,29 +260,70 @@ const AniList = {
     },
 
     /* Batch-hydrate MAL IDs into full GAnime titles (50 a page).
+       TRACKSTORE-FIRST: fresh cached titles (< 7 days) are returned
+       with zero network; only missing or stale ids are fetched.
        Chunks run through a small pool (3 at a time): a ~600-title
        Simkl/MAL list used to pay 12-13 sequential round-trips, and
-       firing all of them at once risks AniList's burst limiter (a
-       CORS-less 429 makes fetch throw, bypassing _post's retry, so
-       the chunk goes unhydrated). 3 keeps most of the speedup with
-       far less burst risk. No result cap — capping would silently
-       drop artwork/metadata for big lists. */
-    async byMalIds(malIds) {
+       firing all of them at once risks AniList's burst limiter.
+       Each chunk gets up to 3 attempts: a CORS-less 429 makes fetch
+       throw (bypassing _post's retry, which is why this uses a raw
+       fetch that sees the status), so thrown errors and 429/5xx are
+       all retryable, with backoff 1s then 2s (Retry-After wins when
+       present); other 4xx fail immediately. A chunk that still
+       fails lands its ids in `pending` — never silently dropped,
+       never saved as degraded media. Successful titles are cached
+       via TrackStore.putTitle. Returns { byMal, pending }. */
+    async byMalIds(malIds, opts) {
         const clean = Array.from(new Set((malIds || []).map(x => parseInt(x, 10)).filter(Boolean)));
-        if (!clean.length) return {};
+        if (!clean.length) return { byMal: {}, pending: [] };
+        const sleep = (opts && opts.sleep) || (ms => new Promise(r => setTimeout(r, ms)));
+        const BACKOFF = [1000, 2000, 4000];
+        const FRESH_MS = 7 * 24 * 3600 * 1000;
         const byMal = {};
+        const toFetch = [];
+        const hasStore = (typeof TrackStore !== 'undefined') && TrackStore && TrackStore.getTitleByMalId;
+        for (const id of clean) {
+            let row = null;
+            if (hasStore) { try { row = await TrackStore.getTitleByMalId(id); } catch (e) {} }
+            if (row && row.media && (Date.now() - (row.fetchedAt || 0)) < FRESH_MS) byMal[id] = row.media;
+            else toFetch.push(id);
+        }
+        if (!toFetch.length) return { byMal, pending: [] };
         const chunks = [];
-        for (let i = 0; i < clean.length; i += 50) chunks.push(clean.slice(i, i + 50));
+        for (let i = 0; i < toFetch.length; i += 50) chunks.push(toFetch.slice(i, i + 50));
         const fetchChunk = async (chunk) => {
             const query = `query ($ids: [Int]) {
                 Page(page: 1, perPage: 50) {
                     media(type: ANIME, idMal_in: $ids) { ${this.FIELDS} }
                 }
             }`;
-            try {
-                const data = await this._post(query, { ids: chunk });
-                return ((data && data.Page && data.Page.media) || []).map(m => this.mapMedia(m));
-            } catch (e) { /* a failed chunk just leaves those unhydrated */ return []; }
+            let lastErr = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (attempt > 0) {
+                    const delay = (lastErr && lastErr.retryAfter != null) ? lastErr.retryAfter * 1000 : BACKOFF[attempt - 1];
+                    await sleep(delay);
+                }
+                try {
+                    const res = await fetch(this.ENDPOINT, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify({ query, variables: { ids: chunk } })
+                    });
+                    if (res.ok) {
+                        const json = await res.json();
+                        if (json.errors) return null; // bad query — retrying won't help
+                        return ((json.data && json.data.Page && json.data.Page.media) || []).map(m => this.mapMedia(m));
+                    }
+                    const ra = parseInt(res.headers && res.headers.get ? (res.headers.get('Retry-After') || '') : '', 10);
+                    const retryable = res.status === 429 || res.status >= 500;
+                    lastErr = { retryable, retryAfter: isNaN(ra) ? null : ra, status: res.status };
+                    if (!retryable) return null;
+                } catch (e) {
+                    // Network throw (including a CORS-less 429) — retryable.
+                    lastErr = { retryable: true, retryAfter: null };
+                }
+            }
+            return null;
         };
         const results = new Array(chunks.length);
         let next = 0;
@@ -287,10 +334,34 @@ const AniList = {
             }
         });
         await Promise.all(workers);
-        results.forEach(list => (list || []).forEach(mapped => {
-            if (mapped.malId) byMal[mapped.malId] = mapped;
-        }));
-        return byMal;
+        const pending = [];
+        for (let idx = 0; idx < results.length; idx++) {
+            const list = results[idx];
+            if (!list) { pending.push.apply(pending, chunks[idx]); continue; }
+            for (const mapped of list) {
+                if (!mapped.malId) continue;
+                byMal[mapped.malId] = mapped;
+                if (hasStore && TrackStore.putTitle) { try { await TrackStore.putTitle(mapped); } catch (e) {} }
+            }
+        }
+        return { byMal, pending };
+    },
+
+    /* TrackStore-only lookup: fresh hydrated titles, no network.
+       Used for the first render so lists show instantly; stale or
+       missing ids come back as gaps for the background fetch. */
+    async byMalIdsCached(malIds) {
+        const clean = Array.from(new Set((malIds || []).map(x => parseInt(x, 10)).filter(Boolean)));
+        const out = {};
+        const hasStore = (typeof TrackStore !== 'undefined') && TrackStore && TrackStore.getTitleByMalId;
+        if (!hasStore || !clean.length) return out;
+        const FRESH_MS = 7 * 24 * 3600 * 1000;
+        for (const id of clean) {
+            let row = null;
+            try { row = await TrackStore.getTitleByMalId(id); } catch (e) {}
+            if (row && row.media && (Date.now() - (row.fetchedAt || 0)) < FRESH_MS) out[id] = row.media;
+        }
+        return out;
     },
 
     /* The full AniList tag list (fetched once, cached). */
@@ -487,7 +558,38 @@ const Trackers = {
         };
     },
 
-    async simklLists(clientId, token) {
+    /* Simkl poster URL. The API's show.poster is NOT a full URL —
+       it's a CDN path fragment, so the old 'simkl.in' + poster
+       build 404'd and left gradient tiles. Per Simkl's image
+       scheme the real form is simkl.in/posters/{prefix}/{image}
+       _m.webp, where the prefix dir is the first 2 chars of the
+       image hash (every documented example matches: 74/74415…,
+       71/71040…, 26/26531…). Full URLs pass through untouched,
+       and any existing size suffix is normalised to _m. */
+    simklPosterUrl(poster) {
+        if (!poster) return '';
+        const p = String(poster).trim();
+        if (p.startsWith('http://') || p.startsWith('https://')) return p;
+        if (p.startsWith('//')) return 'https:' + p;
+        const hasSizeSuffix = /_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?$/.test(p);
+        if (p.indexOf('simkl.in/') !== -1) {
+            const path = p.replace(/^https?:\/\//, '');
+            return 'https://' + (hasSizeSuffix ? path : path.replace(/\.(webp|jpg|jpeg|png)$/, '') + '_m.webp');
+        }
+        const bare = p.replace(/_(m|c|ca|cm|s|w)(\.webp|\.jpg|\.jpeg|\.png)?$/, '').replace(/\.(webp|jpg|jpeg|png)$/, '');
+        if (bare.startsWith('posters/')) return 'https://simkl.in/' + bare + '_m.webp';
+        if (bare.indexOf('/') !== -1) return 'https://simkl.in/posters/' + bare + '_m.webp';
+        return 'https://simkl.in/posters/' + bare.slice(0, 2) + '/' + bare + '_m.webp';
+    },
+
+    /* Simkl lists, fallback-first: the returned entries render
+       IMMEDIATELY from cached titles + Simkl's own metadata
+       (flagged needsHydration when unhydrated), while the full
+       AniList hydration runs in the background and reports via
+       onDone(byMal, pending) so the caller can upgrade cards in
+       place. No await on hydration here — awaiting it was what
+       made the tab skeleton until every chunk landed. */
+    async simklLists(clientId, token, onDone) {
         const r = await fetch(this.SIMKL_API + '/sync/all-items/anime/', {
             headers: { 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId }
         });
@@ -496,17 +598,13 @@ const Trackers = {
         const items = Array.isArray(j) ? j : ((j && j.anime) || []);
         const statusMap = { watching: 'CURRENT', completed: 'COMPLETED', hold: 'PAUSED', dropped: 'DROPPED', plantowatch: 'PLANNING' };
         const malIds = items.map(x => x.show && x.show.ids && x.show.ids.mal).filter(Boolean);
-        const hydrated = await AniList.byMalIds(malIds);
+        const cached = await AniList.byMalIdsCached(malIds);
         const out = {};
         items.forEach(item => {
             const st = statusMap[item.status] || 'CURRENT';
             const ids = (item.show && item.show.ids) || {};
             const malId = ids.mal ? parseInt(ids.mal, 10) : null;
-            let poster = '';
-            if (item.show && item.show.poster) {
-                poster = String(item.show.poster).startsWith('http') ? item.show.poster : 'https://simkl.in' + (String(item.show.poster).startsWith('/') ? '' : '/') + item.show.poster;
-            }
-            const media = (malId && hydrated[malId]) || {
+            const media = (malId && cached[malId]) || Object.assign({
                 id: malId ? 'mal_' + malId : 'simkl_' + (ids.simkl || ids.simkl_id || 0),
                 anilistId: null,
                 malId: malId,
@@ -515,9 +613,9 @@ const Trackers = {
                 score: item.user_rating ? Number(item.user_rating).toFixed(1) : '—',
                 scorePct: item.user_rating ? item.user_rating * 10 : null,
                 eps: item.total_episodes_count || 0,
-                type: 'TV', poster: poster, cover: '', synopsis: '', genres: [],
+                type: 'TV', poster: this.simklPosterUrl(item.show && item.show.poster), cover: '', synopsis: '', genres: [],
                 hue: ((malId || ids.simkl || ids.simkl_id || 1) * 47) % 360
-            };
+            }, { needsHydration: true });
             const updatedTs = item.last_watched_at ? Math.floor(new Date(item.last_watched_at).getTime() / 1000) : 0;
             const entry = {
                 entryId: ids.simkl || ids.simkl_id || malId || 0,
@@ -533,6 +631,15 @@ const Trackers = {
             if (!out[st]) out[st] = { name: st, entries: [] };
             out[st].entries.push(entry);
         });
+        // Background hydration only when the caller wants the result
+        // (App passes onDone; the paste flow doesn't — its relay fetch
+        // right after does the hydration itself, so no double fetch).
+        if (typeof onDone === 'function' && malIds.length) {
+            AniList.byMalIds(malIds).then(
+                r => { try { onDone(r.byMal, r.pending); } catch (e) {} },
+                () => { try { onDone({}, malIds); } catch (e) {} }
+            );
+        }
         return out;
     },
 
@@ -548,7 +655,12 @@ const Trackers = {
         const ids = {};
         if (t.malId) ids.mal = t.malId;
         if (t.anilistId) ids.anilist = t.anilistId;
-        const simklStatusMap = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plantowatch', 'On Hold': 'hold', 'Dropped': 'dropped', 'Rewatching': 'watching' };
+        /* Phase 7: the map takes BOTH vocabularies — the editor's
+           labels ('Watching'/'Completed'/…) and the funnel's
+           AniList enums ('CURRENT'/'COMPLETED'/…) — so plain
+           marks can send status in the same ONE /sync/history
+           call instead of progress alone. */
+        const simklStatusMap = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plantowatch', 'On Hold': 'hold', 'Dropped': 'dropped', 'Rewatching': 'watching', 'CURRENT': 'watching', 'COMPLETED': 'completed', 'PLANNING': 'plantowatch', 'PAUSED': 'hold', 'DROPPED': 'dropped', 'REPEATING': 'watching' };
         const show = { title: t.title, ids };
         if (status) show.status = simklStatusMap[status] || 'watching';
         if (progress > 0) {
@@ -566,12 +678,14 @@ const Trackers = {
     },
 
     /* MAL: parse an api.myanimelist.net v2 animelist response
-       (fetched via the terminal command — MAL has no browser
-       CORS) into the unified list shape, hydrated via AniList. */
-    async malParseListJson(rawItems) {
+       into the unified list shape. Fallback-first like simklLists:
+       cached titles + MAL's own main_picture render immediately
+       (flagged needsHydration when unhydrated); the full AniList
+       hydration runs in the background and reports via onDone. */
+    async malParseListJson(rawItems, onDone) {
         const statusMap = { watching: 'CURRENT', completed: 'COMPLETED', on_hold: 'PAUSED', dropped: 'DROPPED', plan_to_watch: 'PLANNING' };
         const malIds = (rawItems || []).map(x => (x.node && x.node.id) || x.mal_id).filter(Boolean);
-        const hydrated = await AniList.byMalIds(malIds);
+        const cached = await AniList.byMalIdsCached(malIds);
         const out = {};
         (rawItems || []).forEach(x => {
             const node = x.node || x;
@@ -580,7 +694,7 @@ const Trackers = {
             if (!malId) return;
             const rawStatus = String(ls.status || 'watching').toLowerCase().replace(/\s+/g, '_');
             const st = statusMap[rawStatus] || 'CURRENT';
-            const media = hydrated[malId] || {
+            const media = cached[malId] || Object.assign({
                 id: 'mal_' + malId,
                 anilistId: null,
                 malId: malId,
@@ -593,7 +707,7 @@ const Trackers = {
                 poster: (node.main_picture && (node.main_picture.large || node.main_picture.medium)) || '',
                 cover: '', synopsis: '', genres: [],
                 hue: (malId * 47) % 360
-            };
+            }, { needsHydration: true });
             const updatedTs = ls.updated_at ? Math.floor(new Date(ls.updated_at).getTime() / 1000) : 0;
             const finishTs = ls.finish_date ? Math.floor(new Date(ls.finish_date).getTime() / 1000) || 0 : 0;
             const entry = {
@@ -610,6 +724,12 @@ const Trackers = {
             if (!out[st]) out[st] = { name: st, entries: [] };
             out[st].entries.push(entry);
         });
+        if (typeof onDone === 'function' && malIds.length) {
+            AniList.byMalIds(malIds).then(
+                r => { try { onDone(r.byMal, r.pending); } catch (e) {} },
+                () => { try { onDone({}, malIds); } catch (e) {} }
+            );
+        }
         return out;
     }
 };

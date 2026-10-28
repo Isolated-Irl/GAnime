@@ -28,6 +28,15 @@ const App = {
         let bootSyncPromise = null;
         try { if (typeof Sync !== 'undefined') bootSyncPromise = Sync.bootSync(); } catch (e) {}
         this.loadTitleCache();
+        /* Tracker layer Phase 1: move any legacy MAL listsCache
+           out of the token blob into TrackStore. Idempotent —
+           a re-run finds nothing to migrate — and never blocks
+           boot. */
+        try { if (typeof TrackStore !== 'undefined') TrackStore.init().then(() => TrackStore.migrateMalListsCache()).catch(() => {}); } catch (e) {}
+        /* Tracker layer Phase 6: the outbox worker — picks up
+           pushes that failed in an earlier session and retries
+           them. Fire-and-forget, never blocks boot. */
+        try { Tracker.startOutboxWorker(); } catch (e) {}
         this.bindTouchLongPress();
         this.bindHoverDismiss();
         this.bindHashRouting();
@@ -1273,9 +1282,42 @@ const App = {
         const bg = `background:linear-gradient(155deg, hsl(${t.hue} 65% 44%), hsl(${t.hue + 45} 72% 24%))`;
         const _poster = this._safeImgUrl(t.poster);
         if (_poster) {
-            return `<div class="poster-art ${cls || ''}" style="${bg}">${inner || ''}<img class="poster-img" src="${_poster}" alt="" loading="lazy"></div>`;
+            /* Tracker layer Phase 4: a failed poster used to sit
+               as a blank gradient forever. onerror now retries
+               ONCE with a cache-busted URL (a stale edge cache
+               serving a 404 is the common transient failure), then
+               swaps to the letter tile. decoding="async" keeps
+               image decode off the scroll path; loading="lazy"
+               was already there. The tile already reserves its
+               shape via .poster-art { aspect-ratio: 2/3 }, so no
+               layout jump while the image loads. */
+            const letter = (t.title || '?').charAt(0);
+            return `<div class="poster-art ${cls || ''}" style="${bg}">${inner || ''}<img class="poster-img" src="${_poster}" alt="" loading="lazy" decoding="async" data-letter="${this.esc(letter)}" onerror="App._posterImgError(this)"></div>`;
         }
         return `<div class="poster-art ${cls || ''}" style="${bg}">${inner || ''}<span>${t.title.charAt(0)}</span></div>`;
+    },
+
+    /* Poster failure handler for posterArt tiles (Phase 4).
+       First failure: one cache-busted retry, same URL + a query
+       flag (new cache key, so a stale edge 404 doesn't repeat).
+       Second failure: drop the broken img and append the letter
+       span — exactly the no-poster tile, badge (if any) intact.
+       The tile's lettered flag stops any duplicate span. */
+    _posterImgError(img) {
+        if (!img || !img.parentElement) return;
+        const tile = img.parentElement;
+        if (!img.dataset.retried) {
+            img.dataset.retried = '1';
+            img.src = img.src + (img.src.indexOf('?') !== -1 ? '&' : '?') + 'ganime-retry=1';
+            return;
+        }
+        if (tile.dataset.lettered) return;
+        tile.dataset.lettered = '1';
+        if (img.remove) img.remove();
+        else img.style.display = 'none';
+        const s = document.createElement('span');
+        s.textContent = (img.dataset && img.dataset.letter) || '?';
+        tile.appendChild(s);
     },
 
     posterCardHTML(t, badgeHTML) {
@@ -1580,7 +1622,12 @@ const App = {
            banner when a title has no poster. */
         const isMobileHero = typeof window !== 'undefined' && !!window.matchMedia &&
             window.matchMedia('(max-width: 640px)').matches;
-        const heroBg = (isMobileHero && t.poster) ? t.poster : t.cover;
+        /* Phase 4: the mobile hero is a one-at-a-time big display
+           like Details, so it takes the extraLarge variant when
+           present and falls back to the grid poster otherwise —
+           grid cards alone moved to large, hero quality unchanged. */
+        const mobileArt = t.posterXL || t.poster;
+        const heroBg = (isMobileHero && mobileArt) ? mobileArt : t.cover;
         const coverStyle = heroBg
             ? `background-image:url('${this._safeImgUrl(heroBg)}'); background-size:cover; background-position:center 22%`
             : `background:linear-gradient(160deg, hsl(${t.hue} 62% 36%), hsl(${t.hue + 50} 70% 14%) 70%)`;
@@ -2148,8 +2195,21 @@ const App = {
                 }));
             }
         } catch (e) {}
+        /* Tracker layer Phase 7: the local SET is truth, the
+           tracker count is only the highest episode. A deliberate
+           hole (an episode below the local max that local lacks
+           — a middle unmark) is never refilled by the tracker
+           range: the range only extends ABOVE the local max
+           (episodes watched elsewhere that local never had).
+           So: effective = local ∪ {localMax+1 .. trackerProg}
+           when the tracker is ahead, else exactly local. A
+           middle unmark therefore stays visible as unmarked
+           (documented behaviour — trackers store counts, not
+           sets, so they can't represent the hole; the count
+           itself is unchanged by a middle unmark). */
+        const localMax = local.length ? Math.max.apply(null, local) : 0;
         const merged = new Set(local);
-        for (let n = 1; n <= trackerProg; n++) merged.add(n);
+        for (let n = localMax + 1; n <= trackerProg; n++) merged.add(n);
         return Array.from(merged).sort((a, b) => a - b);
     },
 
@@ -2278,34 +2338,23 @@ const App = {
     toggleWatchedEp(titleId, n) {
         const t = this.titleById(titleId);
         if (!t) return;
-        const meta = this.titleMeta(t);
         /* Unmarking must work on tracker-sourced progress too: the
            eye used to toggle local only, but the display merges
            tracker progress — so a tracker-sourced episode could
            never be unmarked (tapping it just re-added it locally,
            or the tracker merge put it straight back). Seed local
-           from the merged list first, then update the in-memory
-           tracker entry so the eye stays off until the push lands.
-           Note: trackers store progress as a count, not a set, so
-           unmarking a middle episode still refills from the count
-           on the next fetch — top-down unmarks and clear-all are
-           the ones that stick. */
+           from the merged list first. Every progress change now
+           flows through Tracker.setProgress (local write,
+           optimistic cache update, pending intent, re-render,
+           push) — trackers store progress as a count, not a set,
+           so unmarking a middle episode still refills from the
+           count on the next fetch; top-down unmarks and
+           clear-all are the ones that stick. */
         const effective = this.getEffectiveWatchedEps(t);
         const isWatched = effective.includes(n);
         const nextEps = isWatched ? effective.filter(x => x !== n) : effective.concat(n).sort((a, b) => a - b);
-        Storage.setWatchedEps(titleId, nextEps, meta);
         const newProg = nextEps.length ? Math.max.apply(null, nextEps) : 0;
-        if (newProg === 0) Storage.setUnwatched(titleId, true);
-        else Storage.setUnwatched(titleId, false);
-        if (this.trackingLists) {
-            Object.values(this.trackingLists).forEach(g => (g.entries || []).forEach(e => {
-                if (e.media && (e.media.id === t.id || (t.anilistId && e.media.anilistId === t.anilistId))) {
-                    e.progress = newProg;
-                }
-            }));
-        }
-        this.renderDetails();
-        this.pushAnilistProgress(t);
+        Tracker.setProgress(t, newProg, undefined, { epsSet: nextEps });
     },
 
     wavePathD() {
@@ -2422,7 +2471,7 @@ const App = {
        is cached this session. */
     titleMeta(t) {
         return t ? {
-            title: t.title, poster: t.poster || '', cover: t.cover || '',
+            title: t.title, poster: t.poster || '', posterXL: t.posterXL || '', cover: t.cover || '',
             total: t.eps || 0, anilistId: t.anilistId || null, malId: t.malId || null,
             year: t.year || '', hue: t.hue || 210, type: t.type || 'TV',
             nextEp: t.nextEp || null
@@ -2602,11 +2651,11 @@ const App = {
         const allWatched = all.every(n => watched.includes(n));
         const next = allWatched ? [] : all;
         const changed = next.length !== watched.length || next.some(n => !watched.includes(n));
-        if (changed) Storage.setWatchedEps(t.id, next, this.titleMeta(t));
         // Revert does not sync: unwatching stays local only, tracker
         // progress is left alone. Marking still pushes, as before.
-        if (changed && next.length) this.pushAnilistProgress(t);
-        if (changed && !next.length) Storage.setUnwatched(t.id, true);
+        // Both directions flow through the one funnel (push: false
+        // for the revert keeps it local-only, flag included).
+        if (changed) Tracker.setProgress(t, next.length ? total : 0, undefined, { epsSet: next, push: next.length > 0 });
         this.renderDetails();
     },
 
@@ -2726,13 +2775,15 @@ const App = {
             }));
         }
         const statusMap = { CURRENT: 'Watching', COMPLETED: 'Completed', PLANNING: 'Plan to Watch', PAUSED: 'On Hold', DROPPED: 'Dropped', REPEATING: 'Rewatching' };
-        /* MAL entry: the MAL list cache (persisted) holds this
-           title's MAL status/progress, matched by AniList id or
-           MAL id — MAL's own statuses have no Rewatching. */
+        /* MAL entry: this session's MAL cache first (full entries,
+           matched by AniList id or MAL id — MAL's own statuses
+           have no Rewatching). The persisted TrackStore list
+           upgrades the draft below when this session hasn't
+           loaded MAL yet. */
         let malEntry = null;
-        const malCache = Storage.getMalConn();
-        if (malCache && malCache.listsCache) {
-            Object.values(malCache.listsCache).forEach(g => (g.entries || []).forEach(e => {
+        const malMem = this.trackingCache['MyAnimeList'];
+        if (malMem && malMem.lists) {
+            Object.values(malMem.lists).forEach(g => (g.entries || []).forEach(e => {
                 if (e.media && (e.media.id === t.id || (t.malId && e.media.malId === t.malId))) malEntry = e;
             }));
         }
@@ -2749,11 +2800,35 @@ const App = {
             mal: {
                 status: malEntry ? (malStatusMap[malEntry.status] || 'Watching') : 'Watching',
                 progress: malEntry ? (malEntry.progress || 0) : localCount,
+                /* Phase 7: MAL scores finally ride along — the
+                   list entry already carries list_status.score. */
+                score: malEntry ? (malEntry.score || 0) : 0,
                 dirty: false
             },
             results: {}
         };
         this.renderTrackingEditor();
+        /* Tracker layer Phase 1: no session cache for MAL yet —
+           upgrade the MAL card from the persisted TrackStore list
+           when it lands. Never overwrites an edit the user already
+           made, and never reopens a closed editor. */
+        if (!malEntry && typeof TrackStore !== 'undefined') {
+            const pid = Storage.getActiveProfileId();
+            TrackStore.getList('MyAnimeList', pid).then(stored => {
+                const d = this._teDraft;
+                if (!stored || !d || d.titleId !== t.id || d.mal.dirty) return;
+                let found = null;
+                Object.values(stored.lists).forEach(g => (g.entries || []).forEach(e => {
+                    if ((e.anilistId && ('a' + e.anilistId) === t.id) || (t.malId && e.malId === t.malId)) found = e;
+                }));
+                if (found) {
+                    d.mal.status = malStatusMap[found.status] || 'Watching';
+                    d.mal.progress = found.progress || 0;
+                    d.mal.score = found.score || 0;
+                    this.renderTrackingEditor();
+                }
+            }).catch(() => {});
+        }
     },
 
     _teDirtyCount() {
@@ -2858,9 +2933,14 @@ const App = {
                         <div class="te-label">Status</div>
                         <select class="setting-select" onchange="App._teSet('mal','status', this.value)">${malOpts(d.mal.status)}</select>
                     </div>
+                    <div>
+                        <div class="te-label">Score (MAL scale 1–10) · <b id="te-mal-score">${d.mal.score || '—'}</b></div>
+                        <input type="range" class="setting-range te-range" min="0" max="10" step="1" value="${d.mal.score}"
+                            oninput="App._teSet('mal','score', parseInt(this.value, 10)); document.getElementById('te-mal-score').textContent = this.value === '0' ? '—' : this.value">
+                    </div>
                 </div>
                 ${epRow('mal', d.mal.progress)}
-                <div class="te-note">Only status and watched episodes are pushed to MAL from this editor.</div>` : ''}
+                <div class="te-note">Status, watched episodes and score are pushed to MAL from this editor in one call (0 = leave your MAL score unchanged).</div>` : ''}
                 ${resLine('mal')}
             </div>
             <div class="te-card">
@@ -2928,6 +3008,15 @@ const App = {
                     Storage.setWatchedEps(t.id, eps, this.titleMeta(t));
                     d.results.anilist = { ok: true, msg: 'AniList — saved ✓' };
                     d.anilist.dirty = false;
+                    /* Phase 5: the confirmed save updates the cached
+                       entry + visible card right now (the timestamp
+                       invalidation below still forces a fresh fetch
+                       next time — instant UI now, verified data
+                       later). The editor can't use the full
+                       setProgress funnel: its saves are
+                       per-provider (with score/notes/dates here),
+                       so it shares only the apply step. */
+                    Tracker.applyLocal('AniList', t, d.anilist.progress, apiStatus[d.anilist.status] || 'CURRENT');
                     this.trackingListsAt = 0;
                     Object.values(this.trackingCache).forEach(e => { e.at = 0; });
                 } catch (e) {
@@ -2950,6 +3039,11 @@ const App = {
                     await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress, statusToSend);
                     d.results.simkl = { ok: true, msg: 'Simkl — history saved ✓' };
                     d.simkl.dirty = false;
+                    /* Phase 5: same instant apply as AniList above
+                       (status only when actually changed — an
+                       episodes-only save must not flip a Completed
+                       show to Watching, same rule as the push). */
+                    Tracker.applyLocal('Simkl', t, d.simkl.progress, statusToSend ? (apiStatus[d.simkl.status] || 'CURRENT') : null);
                     /* Same invalidation the AniList and MAL blocks
                        already do: without it, even a tab switch
                        within 60 s kept showing the old progress. */
@@ -2967,7 +3061,13 @@ const App = {
             if (ml && ml.accessToken && t.malId) {
                 try {
                     const malApiStatus = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plan_to_watch', 'On Hold': 'on_hold', 'Dropped': 'dropped' };
-                    const malBody = { access_token: ml.accessToken, anime_id: t.malId, status: malApiStatus[d.mal.status] || 'watching', num_watched_episodes: d.mal.progress };
+                    /* Phase 7: score rides the SAME update call
+                       (MAL's update is partial — a 0 slider means
+                       "don't touch my score", so it is omitted,
+                       never sent as a wipe). Needs relay v7 to
+                       actually forward it; older relays ignore
+                       the extra field harmlessly. */
+                    const malBody = { access_token: ml.accessToken, anime_id: t.malId, status: malApiStatus[d.mal.status] || 'watching', num_watched_episodes: d.mal.progress, ...(d.mal.score > 0 ? { score: d.mal.score } : {}) };
                     let r = await this._malRelayPost('/mal/update', malBody);
                     if (!r.ok && r.status === 401) {
                         const fresh = await this._malRefreshAccess(ml);
@@ -2976,6 +3076,8 @@ const App = {
                     if (!r.ok) throw new Error((r.data && (r.data.error || r.data.message)) || 'save failed');
                     d.results.mal = { ok: true, msg: 'MAL — saved ✓' };
                     d.mal.dirty = false;
+                    /* Phase 5: same instant apply as above. */
+                    Tracker.applyLocal('MyAnimeList', t, d.mal.progress, apiStatus[d.mal.status] || 'CURRENT', d.mal.score > 0 ? d.mal.score : null);
                     this.trackingListsAt = 0;
                     Object.values(this.trackingCache).forEach(e => { e.at = 0; });
                 } catch (e) {
@@ -3911,7 +4013,7 @@ const App = {
             ${this.backHeader('Tracking')}
             <div class="tracker-stat-row">
                 ${statCard('AniList', !!(al && al.accessToken), al && al.user ? '@' + al.user.name : '', (al && al.accessToken) ? "App.openTrackerManage('anilist')" : 'App.connectAnilistOneClick()')}
-                ${statCard('MyAnimeList', !!(mal && (mal.accessToken || mal.listsCache)), mal && mal.user ? '@' + mal.user.name : '', (mal && (mal.accessToken || mal.listsCache)) ? "App.openTrackerManage('mal')" : 'App.connectMalOneClick()')}
+                ${statCard('MyAnimeList', !!(mal && (mal.accessToken || mal.hasList)), mal && mal.user ? '@' + mal.user.name : '', (mal && (mal.accessToken || mal.hasList)) ? "App.openTrackerManage('mal')" : 'App.connectMalOneClick()')}
                 ${statCard('Simkl', !!(sk && sk.accessToken), sk && sk.user ? '@' + sk.user.name : '', (sk && sk.accessToken) ? "App.openTrackerManage('simkl')" : 'App.connectSimklOneClick()')}
             </div>
             <div class="section-label">CONTINUE WATCHING DATA SOURCE</div>
@@ -3957,7 +4059,7 @@ const App = {
         const mal = Storage.getMalConn();
         const simkl = Storage.getSimklConn();
         const alOk = !!(al && al.accessToken);
-        const malOk = !!(mal && (mal.accessToken || mal.listsCache));
+        const malOk = !!(mal && (mal.accessToken || mal.hasList));
         const skOk = !!(simkl && simkl.accessToken);
         if (pref === 'AniList' && alOk) return 'AniList';
         if (pref === 'MyAnimeList' && malOk) return 'MyAnimeList';
@@ -4268,6 +4370,7 @@ const App = {
         const conn = Storage.getAnilistConn() || {};
         // Keep only the client ID for an easy reconnect.
         Storage.saveAnilistConn({ clientId: conn.clientId || '' });
+        try { Tracker.dropProviderOutbox('AniList'); } catch (e) {}
         this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
@@ -4380,6 +4483,7 @@ const App = {
     simklDisconnect() {
         const conn = Storage.getSimklConn() || {};
         Storage.saveSimklConn({ clientId: conn.clientId || '' });
+        try { Tracker.dropProviderOutbox('Simkl'); } catch (e) {}
         this.trackingLists = null; this.trackingListsAt = 0; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
@@ -4433,9 +4537,14 @@ const App = {
             const listsCache = await Trackers.malParseListJson(items);
             /* Merge, don't replace: a paste must never wipe a
                one-tap token, or the relay load would break until
-               the next login. */
-            const prev = Storage.getMalConn();
-            Storage.saveMalConn({ ...prev, clientId, user: { id: username, name: username, avatar: '' }, listsCache });
+               the next login. Tracker layer Phase 1: the pasted
+               list goes to TrackStore (slim), never into the
+               token blob — saveMalConn strips listsCache anyway. */
+            const prev = Storage.getMalConn() || {};
+            Storage.saveMalConn({ ...prev, clientId, user: { id: username, name: username, avatar: '' }, hasList: true });
+            if (typeof TrackStore !== 'undefined') {
+                try { await TrackStore.putList('MyAnimeList', Storage.getActiveProfileId(), listsCache); } catch (e) {}
+            }
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.closeModal();
             if (this.settingsPage === 'tracking') this.renderSettings();
@@ -4451,6 +4560,11 @@ const App = {
     malDisconnect() {
         const conn = Storage.getMalConn() || {};
         Storage.saveMalConn({ clientId: conn.clientId || '' });
+        /* Tracker layer Phase 1: disconnect drops the persisted
+           list too (the old conn rewrite dropped listsCache with
+           it, so this preserves that behaviour). */
+        try { if (typeof TrackStore !== 'undefined') TrackStore.deleteList('MyAnimeList', Storage.getActiveProfileId()).catch(() => {}); } catch (e) {}
+        try { Tracker.dropProviderOutbox('MyAnimeList'); } catch (e) {}
         this.trackingLists = null; this.trackingListsAt = 0; this.trackingCache = {};
         if (this.settingsPage === 'tracking') this.renderSettings();
     },
@@ -4469,12 +4583,30 @@ const App = {
     trackingListsProvider: null,
     trackingListsAt: 0,
     trackingError: '',
+    /* Tracker layer Phase 2: a background refresh that fails while
+       a list is on screen must not wipe it — it shows a small
+       "couldn't refresh" chip instead. trackingError stays the
+       full-page error for when nothing is displayed at all. */
+    trackingRefreshError: '',
     trackingFetch: null,
     /* Per-provider memory: each tracker tab keeps its own last
        load, so switching tabs shows instantly instead of
        refetching (the displayed slot above still holds only the
        current tab — everything else reads it unchanged). */
     trackingCache: {},
+    /* Tracker layer Phase 5: unconfirmed local marks, keyed by
+       title id: {progress, status, at, lowered, anilistId,
+       malId}. They ride on top of fetched lists until the push
+       confirms or 10 minutes pass. _postMarkTimer is the
+       debounced post-mark refresh (800ms, cooldown-free). */
+    _pendingProgress: {},
+    _postMarkTimer: 0,
+    /* Tracker layer Phase 3: background hydration state. A fetch
+       that started a hydration task marks its provider in flight
+       until onDone (or a fetch failure) clears it; retry rounds
+       count per list load and cap at 3. */
+    _hydrationInFlight: {},
+    _hydrationRounds: {},
     libraryFilter: 'ALL',
     librarySort: 'UPDATED_DESC',
     LIBRARY_SORTS: [
@@ -4517,7 +4649,7 @@ const App = {
         return token;
     },
 
-    async _fetchMalListsViaRelay() {
+    async _fetchMalListsViaRelay(onDone) {
         const mal = Storage.getMalConn();
         if (!mal || !mal.accessToken) return null;
         let token = mal.accessToken;
@@ -4527,7 +4659,7 @@ const App = {
             if (fresh) { token = fresh; r = await this._malRelayPost('/mal/list', { access_token: token }); }
         }
         if (!r.ok || !Array.isArray(r.data.data)) return null;
-        const lists = await Trackers.malParseListJson(r.data.data);
+        const lists = await Trackers.malParseListJson(r.data.data, onDone);
         /* Fill in @name on the first relay load (login alone can't:
            MAL's name lookup needs this relay). Re-read first so a
            refresh-save above isn't clobbered. */
@@ -4553,9 +4685,14 @@ const App = {
            provider's error (placed after the guards, so a cached
            return or an in-flight fetch never wipes anything). */
         this.trackingError = '';
+        this.trackingRefreshError = '';
         this.trackingFetch = (async () => {
             try {
                 let lists = null;
+                /* True when the list came from TrackStore (slim,
+                   expanded) rather than a fresh fetch — those must
+                   not feed cacheTitles (see the MAL branch). */
+                let listsFromStore = false;
                 if (active === 'AniList') {
                     const token = await this.anilistAccessToken();
                     const fresh = Storage.getAnilistConn();
@@ -4563,29 +4700,67 @@ const App = {
                     else if (fresh && fresh.accessToken) this.trackingError = 'AniList session expired — reconnect in Settings → Tracking.';
                 } else if (active === 'Simkl') {
                     const sk = Storage.getSimklConn();
-                    if (sk && sk.accessToken) lists = await Trackers.simklLists(sk.clientId, sk.accessToken);
+                    if (sk && sk.accessToken) {
+                        /* Phase 3: fallback cards render now; the
+                           background hydration upgrades them via
+                           onDone (clears the in-flight flag too). */
+                        this._hydrationInFlight['Simkl'] = true;
+                        lists = await Trackers.simklLists(sk.clientId, sk.accessToken, (byMal, pending) => this._onHydrationDone('Simkl', byMal, pending));
+                    }
                 } else if (active === 'MyAnimeList') {
                     const mal = Storage.getMalConn();
+                    const pid = Storage.getActiveProfileId();
+                    /* Tracker layer Phase 1: the persisted list
+                       lives in TrackStore (slim), never in the
+                       token blob. A TrackStore fallback is expanded
+                       back to renderer-ready entries. */
+                    const readStoredList = async () => {
+                        if (typeof TrackStore === 'undefined') return null;
+                        const stored = await TrackStore.getList('MyAnimeList', pid).catch(() => null);
+                        if (!stored) return null;
+                        listsFromStore = true;
+                        return TrackStore.expandLists(stored.lists);
+                    };
                     if (mal && mal.accessToken) {
                         /* One-tap token: load fresh through the relay,
                            no paste needed. A failed relay load keeps
-                           the last good cache instead of erroring. */
-                        lists = await this._fetchMalListsViaRelay();
+                           the last good persisted list instead of
+                           erroring. Phase 3: same background
+                           hydration as Simkl; a null relay result
+                           means no task started, so clear the flag
+                           here (the success path clears via onDone). */
+                        this._hydrationInFlight['MyAnimeList'] = true;
+                        lists = await this._fetchMalListsViaRelay((byMal, pending) => this._onHydrationDone('MyAnimeList', byMal, pending));
                         if (lists) {
                             const fresh = Storage.getMalConn();
-                            Storage.saveMalConn({ ...(fresh || mal), listsCache: lists });
-                        } else if (mal.listsCache) lists = mal.listsCache;
-                    } else if (mal && mal.listsCache) lists = mal.listsCache;
+                            if (fresh && !fresh.hasList) Storage.saveMalConn({ ...fresh, hasList: true });
+                        } else {
+                            this._hydrationInFlight['MyAnimeList'] = false;
+                            lists = await readStoredList();
+                        }
+                    } else {
+                        /* No token (paste-only): the persisted list
+                           is the only source. */
+                        lists = await readStoredList();
+                    }
                 }
                 if (lists) {
+                    /* Phase 3: a fresh list resets the hydration
+                       retry budget — its fallback cards get 3 new
+                       rounds if they still need hydrating. */
+                    this._hydrationRounds[active] = 0;
                     /* One batched cache write, not one per entry:
                        cacheTitles re-serializes the whole title cache
                        and hits sessionStorage on every call, so 500
                        entries meant 500 synchronous writes (seconds
-                       of frozen UI on a phone). Same merge, one save. */
-                    const allMedia = [];
-                    Object.values(lists).forEach(g => (g.entries || []).forEach(e => { if (e && e.media) allMedia.push(e.media); }));
-                    this.cacheTitles(allMedia);
+                       of frozen UI on a phone). Same merge, one save.
+                       Skipped for TrackStore fallbacks (thin media
+                       must not overwrite good cached titles). */
+                    if (!listsFromStore) {
+                        const allMedia = [];
+                        Object.values(lists).forEach(g => (g.entries || []).forEach(e => { if (e && e.media) allMedia.push(e.media); }));
+                        this.cacheTitles(allMedia);
+                    }
                     /* Per-provider memory: every loaded list is kept
                        under its own provider. The displayed slot
                        only takes the result when this fetch is still
@@ -4594,31 +4769,53 @@ const App = {
                        answer (the map keeps the late data anyway). */
                     const now = Date.now();
                     this.trackingCache[active] = { lists, at: now };
+                    /* Tracker layer Phase 2: persist EVERY
+                       provider's list after a successful fetch
+                       (Phase 1 only did MAL). Skipped for
+                       TrackStore fallbacks — the data came from
+                       the store, no need to write it back. */
+                    if (!listsFromStore && typeof TrackStore !== 'undefined') {
+                        try { await TrackStore.putList(active, Storage.getActiveProfileId(), lists); } catch (e) {}
+                    }
+                    /* Tracker layer Phase 5: unconfirmed local
+                       marks ride on top of every fetched list
+                       (pending overlay), and the two-way
+                       reconcile pulls remote progress up /
+                       re-pushes local progress that is ahead —
+                       never silently lowering, never letting a
+                       stale fetch jump the bar back. Reconcile
+                       runs on fresh fetches only, never on store
+                       snapshots (those aren't remote data). */
+                    Tracker._applyPendingOverlay(lists);
+                    if (!listsFromStore) Tracker._reconcileFetched(lists, active);
                     if (this.activeTrackerName() === active) {
                         this.trackingLists = lists;
                         this.trackingListsProvider = active;
                         this.trackingListsAt = now;
                     }
                     this.trackingError = '';
-                } else if (!this.trackingError && !this.trackingLists) {
-                    /* Never resolve silently: Library's skeleton
-                       branch re-fetches on every null resolve, so a
-                       silent null loops forever and starves the tab
-                       (one-tap MAL has a token but no pasted
-                       listsCache, so it hit this every time).
-                       But a background refresh that fails while a
-                       previous list is on screen must not destroy
-                       it: the stale list stays, and the next switch
-                       retries the refresh. */
-                    this.trackingError = active === 'MyAnimeList'
+                    this.trackingRefreshError = '';
+                } else if (!this.trackingLists) {
+                    if (!this.trackingError) this.trackingError = active === 'MyAnimeList'
                         ? 'MAL lists load from the paste sync in Settings → Tracking (MAL does not answer browsers).'
                         : 'Could not load your ' + active + ' lists.';
+                } else {
+                    /* Tracker layer Phase 2: a failed refresh with
+                       a list on screen sets only the chip flag —
+                       the displayed list stays untouched. */
+                    this.trackingRefreshError = 'Could not refresh your ' + active + ' lists.';
                 }
                 return lists;
             } catch (e) {
                 /* Same stale rule as the null branch: a failed
-                   background refresh never wipes a displayed list. */
+                   background refresh never wipes a displayed list.
+                   Never resolve silently either: a bare null made
+                   Library's skeleton branch re-fetch forever. A
+                   throw also means no hydration task started, so
+                   the in-flight flag must not stick (Phase 3). */
+                if (this._hydrationInFlight) this._hydrationInFlight[active] = false;
                 if (!this.trackingLists) this.trackingError = (e && e.message) || ('Could not load your ' + active + ' lists.');
+                else this.trackingRefreshError = 'Could not refresh your ' + active + ' lists.';
                 return null;
             } finally {
                 this.trackingFetch = null;
@@ -4636,9 +4833,90 @@ const App = {
         return currentFetch;
     },
 
+    /* Tracker layer Phase 3: a background hydration finished for
+       a provider. Clear the in-flight flag, then upgrade any
+       fallback cards it hydrated — in place, no full re-render. */
+    _onHydrationDone(provider, byMal, pending) {
+        if (this._hydrationInFlight) this._hydrationInFlight[provider] = false;
+        this._applyHydrated(provider, byMal);
+    },
+
+    /* Swap hydrated media into fallback entries of one provider's
+       cached list, patch the visible cards, and re-persist the
+       upgraded list. Returns how many entries were upgraded. */
+    _applyHydrated(provider, byMal) {
+        if (!provider || !byMal) return 0;
+        const cached = this.trackingCache[provider];
+        if (!cached || !cached.lists) return 0;
+        let patched = 0;
+        Object.values(cached.lists).forEach(g => (g.entries || []).forEach(e => {
+            if (!e || !e.media || !e.media.needsHydration || !e.media.malId) return;
+            const fresh = byMal[e.media.malId];
+            if (!fresh) return;
+            const oldTid = e.media.id;
+            e.media = fresh;
+            this._patchLibraryCard(oldTid, fresh, e);
+            patched++;
+        }));
+        if (patched && typeof TrackStore !== 'undefined') {
+            try { TrackStore.putList(provider, Storage.getActiveProfileId(), cached.lists); } catch (err) {}
+        }
+        return patched;
+    },
+
+    /* Replace one Library card's art/title/meta in place (no grid
+       rewrite, no scroll jump) and refresh its progress line. The
+       card's data-tid and Details tap move to the hydrated id. */
+    _patchLibraryCard(oldTid, media, entry) {
+        const grid = document.getElementById('libraryGrid');
+        if (!grid || !oldTid || !media) return;
+        const card = grid.querySelector('.poster-card[data-tid="' + oldTid + '"]');
+        if (!card) return;
+        card.outerHTML = this.posterCardHTML(media);
+        const fresh = grid.querySelector('.poster-card[data-tid="' + media.id + '"]');
+        const prog = fresh && fresh.parentElement ? fresh.parentElement.querySelector('.lib-prog') : null;
+        if (prog) prog.innerHTML = this.libProgHTML(entry);
+    },
+
+    /* Tracker layer Phase 3: retry hydration for fallback cards
+       still waiting on AniList. Called on every Library render
+       for a tracker tab; guarded by the in-flight flag and a
+       3-round cap per list load, so renders can't storm AniList.
+       Pending ids are the ones whose media still carries
+       needsHydration — a retry round re-runs byMalIds (which is
+       itself cache-first, so already-hydrated ids cost nothing). */
+    _kickHydrationRetry(provider) {
+        if (!provider || provider === 'Local') return;
+        if (this._hydrationInFlight && this._hydrationInFlight[provider]) return;
+        const rounds = (this._hydrationRounds && this._hydrationRounds[provider]) || 0;
+        if (rounds >= 3) return;
+        const cached = this.trackingCache[provider];
+        if (!cached || !cached.lists) return;
+        const pending = [];
+        Object.values(cached.lists).forEach(g => (g.entries || []).forEach(e => {
+            if (e && e.media && e.media.needsHydration && e.media.malId) pending.push(e.media.malId);
+        }));
+        if (!pending.length) return;
+        if (typeof AniList === 'undefined' || !AniList.byMalIds) return;
+        (this._hydrationRounds || (this._hydrationRounds = {}))[provider] = rounds + 1;
+        (this._hydrationInFlight || (this._hydrationInFlight = {}))[provider] = true;
+        AniList.byMalIds(pending).then(
+            r => { this._hydrationInFlight[provider] = false; this._applyHydrated(provider, r.byMal); },
+            () => { this._hydrationInFlight[provider] = false; }
+        );
+    },
+
     /* Push local watched progress up to AniList (fire-and-forget;
        the local save stays the on-device truth). */
-    async pushAnilistProgress(t) {
+    /* Push local progress to every connected tracker, in parallel.
+       Phase 5: each push now reports 'skipped' (not applicable),
+       true (confirmed) or false (failed) instead of swallowing
+       everything — the caller needs to know whether the mark is
+       confirmed, so the pending intent can clear. Returns
+       {attempted, ok}. opts.skipInvalidate is for the fetch-time
+       reconcile: zeroing fresh timestamps mid-fetch would force
+       a pointless immediate refetch. */
+    async pushAnilistProgress(t, opts) {
         if (!t) return;
         const eps = (Storage.getWatched()[t.id] || {}).eps || [];
         const progress = eps.length ? Math.max.apply(null, eps) : 0;
@@ -4652,17 +4930,21 @@ const App = {
         const sk = Storage.getSimklConn();
         const ml = Storage.getMalConn();
         const pushAl = async () => {
-            if (al && al.accessToken && t.anilistId) {
-                try {
-                    const token = await this.anilistAccessToken();
-                    if (token) await AniList.saveProgress(token, t.anilistId, progress, status);
-                } catch (e) { /* retried next mark */ }
-            }
+            if (!(al && al.accessToken && t.anilistId)) return 'skipped';
+            try {
+                const token = await this.anilistAccessToken();
+                if (!token) return false;
+                await AniList.saveProgress(token, t.anilistId, progress, status);
+                return true;
+            } catch (e) { return false; }
         };
         const pushSk = async () => {
-            if (sk && sk.accessToken && progress > 0) {
-                try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress); } catch (e) { /* same */ }
-            }
+            if (!(sk && sk.accessToken && progress > 0)) return 'skipped';
+            /* Phase 7: plain marks send status in the same ONE
+               /sync/history call (COMPLETED when finished, else
+               the watching status) — progress alone left Simkl
+               showing a stale status next to a fresh count. */
+            try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress, status); return true; } catch (e) { return false; }
         };
         /* MAL scrobbling: the same mark, the same moment, as
            AniList/Simkl — the relay PUTs the episode count (MAL's
@@ -4670,23 +4952,32 @@ const App = {
            No MAL id or no token: skip quietly, local first. A 401
            refreshes once and retries, like the list load. */
         const pushMl = async () => {
-            if (ml && ml.accessToken && t.malId) {
-                try {
-                    const malStatus = (t.eps && progress >= t.eps) ? 'completed' : 'watching';
-                    let r = await this._malRelayPost('/mal/update', { access_token: ml.accessToken, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
-                    if (!r.ok && r.status === 401) {
-                        const fresh = await this._malRefreshAccess(ml);
-                        if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
-                    }
-                } catch (e) { /* same */ }
-            }
+            if (!(ml && ml.accessToken && t.malId)) return 'skipped';
+            try {
+                const malStatus = (t.eps && progress >= t.eps) ? 'completed' : 'watching';
+                let r = await this._malRelayPost('/mal/update', { access_token: ml.accessToken, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                if (!r.ok && r.status === 401) {
+                    const fresh = await this._malRefreshAccess(ml);
+                    if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                }
+                return !!r.ok;
+            } catch (e) { return false; }
         };
-        await Promise.allSettled([pushAl(), pushSk(), pushMl()]);
-        this.trackingListsAt = 0;
-        /* Marks change tracker data, so every cached tab goes stale:
-           each one still shows instantly on next switch, then
-           refreshes in the background. */
-        Object.values(this.trackingCache).forEach(e => { e.at = 0; });
+        const settled = await Promise.allSettled([pushAl(), pushSk(), pushMl()]);
+        const vals = settled.map(s => (s.status === 'fulfilled' ? s.value : false));
+        const attempted = vals.filter(v => v !== 'skipped');
+        const ok = attempted.every(v => v === true);
+        if (!opts || !opts.skipInvalidate) {
+            this.trackingListsAt = 0;
+            /* Marks change tracker data, so every cached tab goes stale:
+               each one still shows instantly on next switch, then
+               refreshes in the background. */
+            Object.values(this.trackingCache).forEach(e => { e.at = 0; });
+        }
+        /* Phase 6: per-provider results, so the caller can enqueue
+           exactly the providers that failed (skipped = not
+           applicable, never enqueued). */
+        return { attempted: attempted.length, ok, results: { AniList: vals[0], Simkl: vals[1], MyAnimeList: vals[2] } };
     },
 
     /* ---------- Library (Tracking stage) ---------- */
@@ -4887,8 +5178,10 @@ const App = {
         const sortMenu = this.librarySortMenuOpen ? `<div class="lib-sort-menu">${this.LIBRARY_SORTS.map(p => `<button class="lib-sort-row ${this.librarySort === p[0] ? 'on' : ''}" onclick="App.setLibrarySort('${p[0]}')">${p[1]}</button>`).join('')}</div>` : '';
         const headerHTML = `
             <div class="lib-head"><h2 class="screen-title">Library</h2></div>
-            <div class="stream-tabs lib-sources">${srcBtn('Local', localLabel)}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}<button class="lib-sort-icon" onclick="App.toggleLibrarySortMenu()" title="Sort">${this.sortIconSVG()}</button></div>${sortMenu}`;
+            <div class="stream-tabs lib-sources">${srcBtn('Local', localLabel)}${srcBtn('AniList', 'AniList')}${srcBtn('MyAnimeList', 'MAL')}${srcBtn('Simkl', 'Simkl')}<button class="lib-sort-icon" onclick="App.toggleLibrarySortMenu()" title="Sort">${this.sortIconSVG()}</button></div>${sortMenu}
+            <div style="margin-top:10px">${Tracker.syncIndicatorHTML()}</div>`;
         if (source === 'Local') {
+            this._libRenderedSig = null;
             controls.innerHTML = headerHTML;
             grid.innerHTML = this.libraryLocalHTML();
             return;
@@ -4905,7 +5198,7 @@ const App = {
             const srcConn0 = source === 'AniList' ? Storage.getAnilistConn()
                 : source === 'Simkl' ? Storage.getSimklConn()
                 : source === 'MyAnimeList' ? Storage.getMalConn() : null;
-            if (srcConn0 && (srcConn0.accessToken || (source === 'MyAnimeList' && srcConn0.listsCache))) {
+            if (srcConn0 && (srcConn0.accessToken || (source === 'MyAnimeList' && srcConn0.hasList))) {
                 this.trackingError = '';
                 Storage.updateSetting('librarySource', source);
                 const cached = this.trackingCache[source];
@@ -4927,6 +5220,7 @@ const App = {
             : active === 'Simkl' ? Storage.getSimklConn()
             : active === 'MyAnimeList' ? Storage.getMalConn() : null;
         if (active !== source || !conn) {
+            this._libRenderedSig = null;
             const opener = source === 'AniList' ? 'App.connectAnilistOneClick()' : source === 'Simkl' ? 'App.connectSimklOneClick()' : 'App.connectMalOneClick()';
             controls.innerHTML = headerHTML;
             grid.innerHTML = `
@@ -4935,6 +5229,18 @@ const App = {
                     <button class="btn-white" onclick="${opener}">Connect ${source === 'MyAnimeList' ? 'MAL' : source}</button>
                 </div>`;
             return;
+        }
+        /* Tracker layer Phase 2 (instant open): if the displayed
+           slot is empty, restore this tab's list from RAM first —
+           a Retry or a back-button return can leave the slot empty
+           while RAM still holds the list. */
+        if (!this.trackingLists || this.trackingListsProvider !== source) {
+            const ram = this.trackingCache[source];
+            if (ram) {
+                this.trackingLists = ram.lists;
+                this.trackingListsAt = ram.at;
+                this.trackingListsProvider = source;
+            }
         }
         const chips = [{ key: 'ALL', label: 'All' }].concat(AniList.LIST_STATUSES).map(s => {
             const count = s.key === 'ALL'
@@ -4945,11 +5251,55 @@ const App = {
         controls.innerHTML = headerHTML + `
             <p class="text-secondary" style="margin-bottom:12px">${active}${conn.user && conn.user.name ? ' · @' + this.esc(conn.user.name) : ''}</p>
             <div class="stream-tabs" style="align-items:center">${chips}</div>`;
-        if (this.trackingError) {
+        /* Full-page error only when nothing is displayed. A list
+           on screen plus a failed refresh shows as a chip above
+           the cards (see below), never a wipe. */
+        if (this.trackingError && !this.trackingLists) {
+            this._libRenderedSig = null;
             grid.innerHTML = `<p class="text-secondary">${this.esc(this.trackingError)}</p><button class="btn-secondary" onclick="App.retryLibrary()">Retry</button>`;
             return;
         }
         if (!this.trackingLists) {
+            /* Tracker layer Phase 2: no skeleton if a persisted
+               list exists. The store read is async, so this render
+               returns WITHOUT touching the grid (previous content
+               stays) and the read's callback either renders the
+               cached list or falls back to skeleton + fetch. */
+            if (typeof TrackStore !== 'undefined') {
+                if (this._libStoreLoading && this._libStoreLoading[source]) return;
+                (this._libStoreLoading || (this._libStoreLoading = {}))[source] = true;
+                const pid = Storage.getActiveProfileId();
+                const skeletonHTML = '<div class="search-grid">' + Array.from({ length: 12 }, () => '<div class="skl-card"></div>').join('') + '</div>';
+                const showSkeletonAndFetch = () => {
+                    this._libRenderedSig = null;
+                    grid.innerHTML = skeletonHTML;
+                    this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
+                };
+                TrackStore.getList(source, pid).then(stored => {
+                    delete this._libStoreLoading[source];
+                    if (this.currentScreen !== 'screen-library' || this.librarySourceTab !== source) return;
+                    if (stored) {
+                        const lists = TrackStore.expandLists(stored.lists);
+                        this.trackingCache[source] = { lists, at: stored.at };
+                        this.trackingLists = lists;
+                        this.trackingListsAt = stored.at;
+                        this.trackingListsProvider = source;
+                        this.renderLibrary();
+                        /* Stale-while-revalidate: the cached list
+                           is on screen now; refresh behind it
+                           unless a fetch is already running. */
+                        if (!this.trackingFetch) this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
+                    } else if (!this.trackingLists) {
+                        showSkeletonAndFetch();
+                    }
+                }).catch(() => {
+                    delete this._libStoreLoading[source];
+                    if (this.currentScreen !== 'screen-library' || this.librarySourceTab !== source || this.trackingLists) return;
+                    showSkeletonAndFetch();
+                });
+                return;
+            }
+            this._libRenderedSig = null;
             grid.innerHTML = '<div class="search-grid">' + Array.from({ length: 12 }, () => '<div class="skl-card"></div>').join('') + '</div>';
             this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
             return;
@@ -4971,14 +5321,37 @@ const App = {
             ? AniList.LIST_STATUSES.map(s => (this.trackingLists[s.key] || {}).entries || [])
             : [((this.trackingLists[this.libraryFilter] || {}).entries || [])];
         const entries = this.sortLibraryEntries([].concat.apply([], groups));
+        /* Tracker layer Phase 3: a render with fallback cards
+           still waiting on AniList retries them (max 3 rounds).
+           Placed before the diff-skip, so even a render that
+           changes nothing still gets its retry chance. */
+        this._kickHydrationRetry(source);
+        /* Tracker layer Phase 2: rewrite the grid only when
+           something actually changed (list content, filter, sort,
+           or the refresh-error state) — a background refresh that
+           lands identical data must not rewrite hundreds of cards
+           and flicker the screen. The chip rides on the same grid
+           write, so a failed refresh adds it without wiping. */
+        const listSig = entries.map(e => e.entryId + ':' + e.status + ':' + (e.progress || 0)).join('|');
+        const sig = source + '|' + this.libraryFilter + '|' + this.librarySort + '|' + (this.trackingRefreshError ? 'ERR' : '') + '|' + listSig;
+        const refreshChip = this.trackingRefreshError
+            ? `<div style="margin:0 0 12px"><span class="text-secondary">Couldn't refresh</span> <button class="btn-secondary" onclick="App.retryLibrary()">Retry</button></div>`
+            : '';
         if (!entries.length) {
-            grid.innerHTML = '<p class="text-secondary">This list is empty on ' + this.esc(active) + '.</p>';
+            grid.innerHTML = refreshChip + '<p class="text-secondary">This list is empty on ' + this.esc(active) + '.</p>';
+            this._libRenderedSig = sig;
             return;
         }
-        grid.innerHTML = `<div class="search-grid">${entries.map(e => this.libraryCardHTML(e)).join('')}</div>`;
+        if (sig === this._libRenderedSig) return;
+        grid.innerHTML = refreshChip + `<div class="search-grid">${entries.map(e => this.libraryCardHTML(e)).join('')}</div>`;
+        this._libRenderedSig = sig;
     },
 
-    libraryCardHTML(e) {
+    /* The progress line under a Library card, factored out of
+       libraryCardHTML so a hydrated card patch can refresh it
+       without rebuilding the whole card (Phase 3). Output is
+       identical to the old inline version. */
+    libProgHTML(e) {
         const t = e.media;
         const total = t.eps || 0;
         /* Caught-up bar (all tabs): with no announced total, an
@@ -4991,10 +5364,14 @@ const App = {
         const denom = total || aired;
         const pct = denom ? Math.min(100, Math.round((e.progress / denom) * 100)) : 0;
         const bar = denom ? `<div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div>` : '';
+        return `${bar}
+            <span>${e.progress}${total ? ' / ' + total : ''} eps</span>`;
+    },
+
+    libraryCardHTML(e) {
         return `<div class="lib-item">
-            ${this.posterCardHTML(t)}
-            <div class="lib-prog">${bar}
-            <span>${e.progress}${total ? ' / ' + total : ''} eps</span></div>
+            ${this.posterCardHTML(e.media)}
+            <div class="lib-prog">${this.libProgHTML(e)}</div>
         </div>`;
     },
 
@@ -5005,9 +5382,15 @@ const App = {
     },
 
     retryLibrary() {
-        this.trackingLists = null;
+        /* Tracker layer Phase 2: Retry never wipes a displayed
+           list — it clears the errors, forces the list stale, and
+           re-renders (a displayed list stays up while the refresh
+           runs; with nothing displayed, the store/skeleton path
+           runs as usual). */
         this.trackingError = '';
+        this.trackingRefreshError = '';
         this.trackingListsAt = 0;
+        this._libBgAt = 0;
         this.renderLibrary();
     },
 
@@ -5351,6 +5734,548 @@ const App = {
     closeModal() {
         try { if (typeof this.simklStopAutoPoll === 'function') this.simklStopAutoPoll(); } catch (e) {}
         document.getElementById('modalRoot').innerHTML = '';
+    }
+};
+
+/* ============================================================
+   TRACKER LAYER PHASE 5 — optimistic sync core.
+   One funnel for every progress change: write local, update
+   the cached lists, record the unconfirmed intent, re-render,
+   then push. toggleWatchedEp, markAllWatched and the player
+   auto-mark (via toggleWatchedEp) all call setProgress; the
+   editor's per-provider saves can't use the all-provider
+   funnel (they carry per-provider values, plus AniList
+   score/notes/dates), so they share applyLocal instead — the
+   same cache-update + re-render steps, scoped to one provider.
+   No other code path writes progress. */
+const Tracker = {
+    /* A pending intent lives at most 10 minutes: long enough to
+       cover a slow push, short enough that a dead push can't
+       pin the bar forever (Phase 6 retries from the outbox). */
+    PENDING_TTL_MS: 10 * 60 * 1000,
+
+    _pending() {
+        if (!App._pendingProgress) App._pendingProgress = {};
+        return App._pendingProgress;
+    },
+
+    _prunePending() {
+        const p = this._pending();
+        const now = Date.now();
+        Object.keys(p).forEach(k => { if (now - (p[k].at || 0) > this.PENDING_TTL_MS) delete p[k]; });
+    },
+
+    _entryMatches(entry, title) {
+        const m = entry && entry.media;
+        if (!m || !title) return false;
+        return m.id === title.id ||
+            (title.anilistId && m.anilistId === title.anilistId) ||
+            (title.malId && m.malId === title.malId);
+    },
+
+    /* Update (or add) the title's entry in cached lists. Scope
+       null = every provider's cache + the displayed slot; a
+       provider name = just that provider's cache (+ the
+       displayed slot when it shows that provider — the slot
+       usually IS the cache object, the seen-set dedupes that).
+       An entry is only added when a status is known (a
+       status-less apply, like a Simkl episodes-only editor
+       save, updates in place but never invents a group). */
+    _updateCachedEntries(title, progress, status, scope, score) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const seen = new Set();
+        let touched = 0;
+        const applyToLists = (lists) => {
+            if (!lists || seen.has(lists)) return;
+            seen.add(lists);
+            let found = false;
+            Object.values(lists).forEach(g => (g.entries || []).forEach(e => {
+                if (!this._entryMatches(e, title)) return;
+                found = true;
+                e.progress = progress;
+                if (status) e.status = status;
+                /* Phase 7: a user score rides along when given
+                   (MAL editor save) — omitted otherwise, so an
+                   unset score never clears an existing one. */
+                if (typeof score === 'number') e.score = score;
+                e.updatedAt = nowSec;
+                touched++;
+            }));
+            if (!found && status) {
+                if (!lists[status]) lists[status] = { name: status, entries: [] };
+                lists[status].entries.push({
+                    entryId: title.anilistId || title.malId || 0,
+                    status: status,
+                    progress: progress,
+                    score: (typeof score === 'number' ? score : 0),
+                    updatedAt: nowSec,
+                    createdAt: nowSec,
+                    completedAt: status === 'COMPLETED' ? nowSec : 0,
+                    media: title
+                });
+                touched++;
+            }
+        };
+        if (scope) {
+            const cached = App.trackingCache[scope];
+            if (cached && cached.lists) applyToLists(cached.lists);
+        } else {
+            Object.values(App.trackingCache || {}).forEach(c => { if (c && c.lists) applyToLists(c.lists); });
+        }
+        if (App.trackingLists && (!scope || App.trackingListsProvider === scope)) applyToLists(App.trackingLists);
+        return touched;
+    },
+
+    /* The one funnel. opts: {epsSet (explicit local set for the
+       per-episode toggle — otherwise 1..progress), push (false
+       = the mark-all revert: local only, no cache touch, no
+       pending, no push, by ruling)}. Status: explicit, else
+       COMPLETED when progress reaches the total, else CURRENT
+       — the same status the push itself sends. */
+    setProgress(title, progress, status, opts) {
+        if (!title || !title.id) return;
+        opts = opts || {};
+        const pushing = opts.push !== false;
+        progress = Math.max(0, Math.floor(progress) || 0);
+        this._prunePending();
+        let prevMax = 0;
+        try {
+            const eps = ((Storage.getWatched()[title.id] || {}).eps || []);
+            prevMax = eps.length ? Math.max.apply(null, eps) : 0;
+        } catch (e) {}
+        // (1) Local first: the device is the truth.
+        const epsSet = opts.epsSet ? opts.epsSet.slice().sort((a, b) => a - b)
+            : (progress > 0 ? Array.from({ length: progress }, (_, i) => i + 1) : []);
+        Storage.setWatchedEps(title.id, epsSet, App.titleMeta(title));
+        try { Storage.setUnwatched(title.id, !epsSet.length); } catch (e) {}
+        // (2) Optimistic cache update + (3) pending intent — only
+        // for changes that will be pushed. A revert leaves tracker
+        // data alone: the tracker tab keeps showing tracker truth
+        // while Details shows local truth via the unwatch flag.
+        const effStatus = status || ((title.eps && progress >= title.eps) ? 'COMPLETED' : 'CURRENT');
+        if (pushing) {
+            this._updateCachedEntries(title, progress, effStatus, null);
+            const pending = this._pending();
+            pending[title.id] = {
+                progress: progress, status: effStatus, at: Date.now(),
+                lowered: progress < prevMax,
+                anilistId: title.anilistId || null, malId: title.malId || null
+            };
+        }
+        // (4) Re-render immediately: the bar moves in this frame.
+        if (App.currentScreen === 'screen-library') App.renderLibrary();
+        if (App.currentScreen === 'screen-details') App.renderDetails();
+        // (5) Push; on confirmation clear the intent and schedule
+        // the debounced post-mark refresh (800ms, cooldown-free:
+        // _libBgAt is reset so the refresh actually runs instead
+        // of dying on the old 30s cooldown).
+        if (!pushing) return;
+        let pushP = null;
+        try { pushP = App.pushAnilistProgress(title); } catch (e) { pushP = null; }
+        if (!pushP || !pushP.then) return;
+        pushP.then(async res => {
+            // Phase 6: every provider whose push actually failed
+            // gets a durable outbox item (coalesced per
+            // title+provider, latest progress wins). Skipped
+            // providers are never enqueued.
+            if (res && res.results) {
+                for (const provider of ['AniList', 'Simkl', 'MyAnimeList']) {
+                    if (res.results[provider] === false) {
+                        try { await this.enqueueOutbox(title, progress, effStatus, provider); } catch (e) {}
+                    }
+                }
+            }
+            if (res && res.attempted === 0) { delete this._pending()[title.id]; }
+            else if (res && res.ok) {
+                delete this._pending()[title.id];
+                if (App._postMarkTimer) clearTimeout(App._postMarkTimer);
+                App._postMarkTimer = setTimeout(() => {
+                    App._libBgAt = 0;
+                    App.fetchTrackingLists().then(() => {
+                        if (App.currentScreen === 'screen-library') App.renderLibrary();
+                    });
+                }, 800);
+            }
+            // A failed push keeps its pending record: the overlay
+            // holds the bar until it expires (10 min) or the
+            // outbox worker confirms it.
+            // Worker kick after every mark: flushes any DUE items
+            // from earlier sessions (fresh failures aren't due —
+            // their backoff hasn't elapsed — so this never
+            // hammers a just-failed push).
+            try { this.flushOutbox(false); } catch (e) {}
+        }, () => {});
+    },
+
+    /* Shared apply step for confirmed editor saves: update one
+       provider's cached entries (+ the visible card) right now.
+       No local write, no pending, no push — the save already
+       happened, directly, with its own result reporting. */
+    applyLocal(provider, title, progress, status, score) {
+        if (!provider || !title || !title.id) return;
+        this._updateCachedEntries(title, progress, status || null, provider, score);
+        if (App.currentScreen === 'screen-library') App.renderLibrary();
+        if (App.currentScreen === 'screen-details') App.renderDetails();
+    },
+
+    /* Pending overlay: re-apply unconfirmed local marks on top
+       of a freshly fetched list, so a stale fetch can never
+       jump the bar back. A lowered intent (explicit unmark)
+       sets the count exactly; a normal mark only ever raises
+       it (remote higher still wins — the user watched more
+       elsewhere). Status rides along when recorded. Returns
+       how many entries were changed. */
+    _applyPendingOverlay(lists) {
+        if (!lists) return 0;
+        this._prunePending();
+        const pending = this._pending();
+        const keys = Object.keys(pending);
+        if (!keys.length) return 0;
+        const byKey = {};
+        keys.forEach(k => {
+            const r = pending[k];
+            byKey[k] = r;
+            if (r.anilistId) byKey['a' + r.anilistId] = r;
+            if (r.malId) byKey['mal_' + r.malId] = r;
+        });
+        let applied = 0;
+        Object.values(lists).forEach(g => (g.entries || []).forEach(e => {
+            const m = e && e.media;
+            if (!m) return;
+            const rec = byKey[m.id];
+            if (!rec) return;
+            let changed = false;
+            if (rec.lowered) {
+                if (e.progress !== rec.progress) { e.progress = rec.progress; changed = true; }
+            } else if (rec.progress > e.progress) {
+                e.progress = rec.progress; changed = true;
+            }
+            if (rec.status && e.status !== rec.status) { e.status = rec.status; changed = true; }
+            if (changed) {
+                e.updatedAt = Math.max(e.updatedAt || 0, Math.floor(rec.at / 1000));
+                applied++;
+            }
+        }));
+        return applied;
+    },
+
+    /* Two-way reconcile on a fresh fetch, Aniyomi-style. Only
+       titles with local state are touched (a first connect must
+       not flood local watched with hundreds of remote entries).
+       Remote ahead -> pull local up (union, so the set shape
+       survives — holes stay holes). Local ahead with nothing
+       pending -> re-push it (the offline-mark recovery path;
+       fire-and-forget, skipInvalidate so the fresh fetch isn't
+       immediately trashed). Explicit local unmarks (unwatch
+       flag), pending intents, and outbox-queued titles always
+       win over remote — the worker owns a queued title's
+       retries, so reconcile must not double-push it. */
+    _reconcileFetched(lists, active) {
+        if (!lists) return;
+        let watched = {};
+        let unwatched = {};
+        try { watched = Storage.getWatched() || {}; } catch (e) {}
+        try { unwatched = Storage.getUnwatched() || {}; } catch (e) {}
+        this._prunePending();
+        const pending = this._pending();
+        const pendingKeys = new Set();
+        Object.keys(pending).forEach(k => {
+            pendingKeys.add(k);
+            const r = pending[k];
+            if (r.anilistId) pendingKeys.add('a' + r.anilistId);
+            if (r.malId) pendingKeys.add('mal_' + r.malId);
+        });
+        Object.values(lists).forEach(g => (g.entries || []).forEach(e => {
+            const m = e && e.media;
+            if (!m) return;
+            const candidates = [m.id];
+            if (m.anilistId) candidates.push('a' + m.anilistId);
+            if (m.malId) candidates.push('mal_' + m.malId);
+            const matched = candidates.filter(k => k && watched[k] && Array.isArray(watched[k].eps));
+            if (!matched.length) return;
+            if (matched.some(k => unwatched[k])) return;
+            if (candidates.some(k => k && pendingKeys.has(k))) return;
+            if (active && candidates.some(k => k && this._outboxIds.has(active + '|' + k))) return;
+            let localMax = 0;
+            matched.forEach(k => {
+                const eps = watched[k].eps || [];
+                if (eps.length) localMax = Math.max(localMax, Math.max.apply(null, eps));
+            });
+            const remote = e.progress || 0;
+            if (remote > localMax) {
+                /* Phase 7: pull up hole-preserving, like the
+                   display merge — only episodes ABOVE each key's
+                   own max are added (watched elsewhere, never
+                   locally present, so no deliberate hole can
+                   live there). A middle hole below the max is
+                   never filled by a pull-up. */
+                matched.forEach(k => {
+                    const cur = watched[k].eps || [];
+                    const curMax = cur.length ? Math.max.apply(null, cur) : 0;
+                    const set = new Set(cur);
+                    for (let n = curMax + 1; n <= remote; n++) set.add(n);
+                    try { Storage.setWatchedEps(k, Array.from(set).sort((a, b) => a - b), null); } catch (err) {}
+                });
+            } else if (localMax > remote) {
+                const t = { id: matched[0], eps: m.eps || 0, anilistId: m.anilistId || null, malId: m.malId || null };
+                try {
+                    const p = App.pushAnilistProgress(t, { skipInvalidate: true });
+                    if (p && p.catch) p.catch(() => {});
+                } catch (err) {}
+            }
+        }));
+    },
+
+    /* ============================================================
+       TRACKER LAYER PHASE 6 — outbox with retry.
+       A failed push is no longer a shrug: it becomes a durable
+       item in TrackStore (one per title+provider, latest progress
+       wins) and the worker retries it until the provider confirms.
+       The worker runs on app start, after each mark, on 'online',
+       on visibilitychange→visible, and every 30s while items
+       exist. Backoff: 5s, 15s, 60s, 5min (capped). An item is
+       deleted ONLY on confirmed success — never on a guess.
+       When TrackStore isn't loaded (tests), a memory map holds
+       the same items for the session. */
+    _outboxIds: new Set(),
+    _outboxCount: 0,
+    _outboxSyncing: false,
+    _flushing: false,
+    _flushQueued: false,
+    _forceNextFlush: false,
+    _outboxTimer: 0,
+    _outboxListeners: false,
+    _memOutbox: new Map(),
+
+    _backoffMs(attempts) {
+        const table = [5000, 15000, 60000, 300000];
+        return table[Math.min(Math.max(attempts, 1), 4) - 1];
+    },
+
+    _outboxId(provider, titleId) { return provider + '|' + titleId; },
+
+    async _obAll() {
+        try {
+            if (typeof TrackStore !== 'undefined' && TrackStore && TrackStore.getOutbox) return (await TrackStore.getOutbox()) || [];
+        } catch (e) {}
+        return Array.from(this._memOutbox.values());
+    },
+    async _obPut(item) {
+        try {
+            if (typeof TrackStore !== 'undefined' && TrackStore && TrackStore.putOutbox) { await TrackStore.putOutbox(item); return; }
+        } catch (e) {}
+        this._memOutbox.set(item.id, item);
+    },
+    async _obDel(id) {
+        try {
+            if (typeof TrackStore !== 'undefined' && TrackStore && TrackStore.deleteOutbox) { await TrackStore.deleteOutbox(id); return; }
+        } catch (e) {}
+        this._memOutbox.delete(id);
+    },
+
+    /* Enqueue (or coalesce) one failed push. The item records
+       the attempt already made by the immediate push, so its
+       first retry waits the 5s backoff instead of hammering. */
+    async enqueueOutbox(title, progress, status, provider) {
+        if (!title || !title.id || !provider) return null;
+        const id = this._outboxId(provider, title.id);
+        let attempts = 1;
+        try {
+            const all = await this._obAll();
+            const existing = all.find(x => x && x.id === id);
+            if (existing) attempts = (existing.attempts || 0) + 1;
+        } catch (e) {}
+        const item = {
+            id: id, provider: provider, titleId: title.id,
+            payload: {
+                progress: progress, status: status || null,
+                eps: title.eps || 0, anilistId: title.anilistId || null,
+                malId: title.malId || null, title: title.title || ''
+            },
+            attempts: attempts,
+            nextAt: Date.now() + this._backoffMs(attempts),
+            createdAt: Date.now()
+        };
+        await this._obPut(item);
+        this._outboxIds.add(id);
+        this._outboxCount = this._outboxIds.size;
+        this._scheduleOutboxTick();
+        this._renderSyncIndicator();
+        return item;
+    },
+
+    /* Disconnecting a tracker drops its queued pushes: without
+       a token they could never succeed, and retrying them
+       forever would pin the indicator at N pending. */
+    async dropProviderOutbox(provider) {
+        try {
+            const items = await this._obAll();
+            for (const item of items) {
+                if (item.provider === provider) {
+                    await this._obDel(item.id);
+                    this._outboxIds.delete(item.id);
+                }
+            }
+            this._outboxCount = this._outboxIds.size;
+        } catch (e) {}
+        this._renderSyncIndicator();
+    },
+
+    /* One outbox attempt. Returns true (confirmed — delete it),
+       'drop' (unprocessable — delete it rather than retrying
+       forever), or false (failed — back off and keep it). Every
+       response is checked; nothing is assumed from a sent
+       request. The AniList mutation response updates the local
+       entry: the server's numbers are authoritative. */
+    async _pushOutboxItem(item) {
+        const p = item.payload || {};
+        try {
+            if (item.provider === 'AniList') {
+                const conn = Storage.getAnilistConn();
+                if (!conn || !conn.accessToken || !p.anilistId) return false;
+                const token = await App.anilistAccessToken();
+                if (!token) return false;
+                const res = await AniList.saveProgress(token, p.anilistId, p.progress, p.status || 'CURRENT');
+                const saved = res && res.SaveMediaListEntry;
+                if (saved && typeof saved.progress === 'number') {
+                    this._updateCachedEntries({ id: item.titleId, anilistId: p.anilistId, malId: p.malId }, saved.progress, saved.status || null, 'AniList');
+                    if (App.currentScreen === 'screen-library') App.renderLibrary();
+                }
+                return true;
+            }
+            if (item.provider === 'Simkl') {
+                const conn = Storage.getSimklConn();
+                if (!conn || !conn.accessToken) return false;
+                const t = { id: item.titleId, title: p.title || '', eps: p.eps || 0, anilistId: p.anilistId || null, malId: p.malId || null };
+                /* Phase 7: same status-in-the-call rule as the
+                   live funnel (stored AniList enum, or derived
+                   from progress/total when an old item lacks it). */
+                const skStatus = p.status || ((p.eps && p.progress >= p.eps) ? 'COMPLETED' : 'CURRENT');
+                await Trackers.simklSaveProgress(conn.clientId, conn.accessToken, t, p.progress, skStatus);
+                return true;
+            }
+            if (item.provider === 'MyAnimeList') {
+                const conn = Storage.getMalConn();
+                if (!conn || !conn.accessToken || !p.malId) return false;
+                const malStatus = (p.status === 'COMPLETED') ? 'completed' : 'watching';
+                const body = { access_token: conn.accessToken, anime_id: p.malId, status: malStatus, num_watched_episodes: p.progress };
+                let r = await App._malRelayPost('/mal/update', body);
+                if (!r.ok && r.status === 401) {
+                    const fresh = await App._malRefreshAccess(conn);
+                    if (fresh) r = await App._malRelayPost('/mal/update', { ...body, access_token: fresh });
+                }
+                return !!r.ok;
+            }
+            return 'drop';
+        } catch (e) {
+            item.lastError = (e && e.message) || 'push failed';
+            return false;
+        }
+    },
+
+    /* The worker. One flight at a time; a call during a flight
+       queues one more run after it. force (tap-to-retry)
+       attempts everything, even items inside backoff. */
+    async flushOutbox(force) {
+        if (this._flushing) { this._flushQueued = true; return false; }
+        const effForce = !!force || this._forceNextFlush;
+        this._forceNextFlush = false;
+        this._flushing = true;
+        this._outboxSyncing = true;
+        this._renderSyncIndicator();
+        try {
+            const items = await this._obAll();
+            const now = Date.now();
+            const deletedTitles = [];
+            for (const item of items) {
+                if (!effForce && item.nextAt && item.nextAt > now) continue;
+                let ok = false;
+                try { ok = await this._pushOutboxItem(item); } catch (e) { ok = false; }
+                if (ok === true || ok === 'drop') {
+                    await this._obDel(item.id);
+                    this._outboxIds.delete(item.id);
+                    deletedTitles.push(item.titleId);
+                } else {
+                    item.attempts = (item.attempts || 0) + 1;
+                    item.nextAt = Date.now() + this._backoffMs(item.attempts);
+                    await this._obPut(item);
+                    this._outboxIds.add(item.id);
+                }
+            }
+            const rest = await this._obAll();
+            this._outboxIds.clear();
+            rest.forEach(x => { if (x && x.id) this._outboxIds.add(x.id); });
+            this._outboxCount = rest.length;
+            deletedTitles.forEach(tid => {
+                if (!rest.some(x => x.titleId === tid)) delete this._pending()[tid];
+            });
+        } catch (e) {
+            /* The worker never throws: a storage hiccup just
+               means this round did nothing; the timer retries. */
+        } finally {
+            this._flushing = false;
+            this._outboxSyncing = false;
+            this._renderSyncIndicator();
+            if (this._outboxCount > 0) this._scheduleOutboxTick();
+            else this._clearOutboxTick();
+            if (this._flushQueued) {
+                this._flushQueued = false;
+                this.flushOutbox(false);
+            }
+        }
+        return true;
+    },
+
+    /* Tap-to-retry: the next flush attempts everything, even
+       items still inside their backoff window. */
+    retryOutbox() {
+        this._forceNextFlush = true;
+        this.flushOutbox(false);
+    },
+
+    _scheduleOutboxTick() {
+        this._clearOutboxTick();
+        this._outboxTimer = setTimeout(() => { this.flushOutbox(false); }, 30000);
+    },
+    _clearOutboxTick() {
+        if (this._outboxTimer) { clearTimeout(this._outboxTimer); this._outboxTimer = 0; }
+    },
+
+    /* Library header indicator: synced / syncing / N pending. */
+    syncIndicatorHTML() {
+        if (this._outboxSyncing) return `<span class="text-secondary">Syncing…</span>`;
+        const n = this._outboxCount || 0;
+        if (n > 0) return `<button class="btn-secondary" onclick="Tracker.retryOutbox()">${n} pending — tap to retry</button>`;
+        return `<span class="text-secondary">✓ Synced</span>`;
+    },
+    _renderSyncIndicator() {
+        if (App.currentScreen === 'screen-library') App.renderLibrary();
+    },
+
+    /* Started once from App.init: loads the persisted queue,
+       wires the triggers, and immediately flushes what's due
+       (marks from a previous session that never landed). */
+    async startOutboxWorker() {
+        try {
+            const items = await this._obAll();
+            this._outboxIds.clear();
+            items.forEach(x => { if (x && x.id) this._outboxIds.add(x.id); });
+            this._outboxCount = items.length;
+        } catch (e) {}
+        if (!this._outboxListeners) {
+            this._outboxListeners = true;
+            try {
+                window.addEventListener('online', () => { this.flushOutbox(false); });
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') this.flushOutbox(false);
+                });
+            } catch (e) {}
+        }
+        if (this._outboxCount > 0) {
+            this._scheduleOutboxTick();
+            this.flushOutbox(false);
+        }
+        this._renderSyncIndicator();
     }
 };
 
