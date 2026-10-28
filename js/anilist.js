@@ -254,16 +254,20 @@ const AniList = {
     },
 
     /* Batch-hydrate MAL IDs into full GAnime titles (50 a page).
-       Chunks run in parallel (no cap — capping would silently drop
-       artwork/metadata for big lists): a ~600-title Simkl/MAL list
-       used to pay 12-13 sequential round-trips, one after another. */
+       Chunks run through a small pool (3 at a time): a ~600-title
+       Simkl/MAL list used to pay 12-13 sequential round-trips, and
+       firing all of them at once risks AniList's burst limiter (a
+       CORS-less 429 makes fetch throw, bypassing _post's retry, so
+       the chunk goes unhydrated). 3 keeps most of the speedup with
+       far less burst risk. No result cap — capping would silently
+       drop artwork/metadata for big lists. */
     async byMalIds(malIds) {
         const clean = Array.from(new Set((malIds || []).map(x => parseInt(x, 10)).filter(Boolean)));
         if (!clean.length) return {};
         const byMal = {};
         const chunks = [];
         for (let i = 0; i < clean.length; i += 50) chunks.push(clean.slice(i, i + 50));
-        const results = await Promise.allSettled(chunks.map(async (chunk) => {
+        const fetchChunk = async (chunk) => {
             const query = `query ($ids: [Int]) {
                 Page(page: 1, perPage: 50) {
                     media(type: ANIME, idMal_in: $ids) { ${this.FIELDS} }
@@ -273,12 +277,19 @@ const AniList = {
                 const data = await this._post(query, { ids: chunk });
                 return ((data && data.Page && data.Page.media) || []).map(m => this.mapMedia(m));
             } catch (e) { /* a failed chunk just leaves those unhydrated */ return []; }
-        }));
-        results.forEach(r => {
-            if (r.status === 'fulfilled') r.value.forEach(mapped => {
-                if (mapped.malId) byMal[mapped.malId] = mapped;
-            });
+        };
+        const results = new Array(chunks.length);
+        let next = 0;
+        const workers = Array.from({ length: Math.min(3, chunks.length) }, async () => {
+            while (next < chunks.length) {
+                const idx = next++;
+                results[idx] = await fetchChunk(chunks[idx]);
+            }
         });
+        await Promise.all(workers);
+        results.forEach(list => (list || []).forEach(mapped => {
+            if (mapped.malId) byMal[mapped.malId] = mapped;
+        }));
         return byMal;
     },
 
@@ -384,7 +395,7 @@ const AniList = {
         const query = `query ($userId: Int) {
             MediaListCollection(userId: $userId, type: ANIME) {
                 lists { name status entries {
-                    id status progress score updatedAt createdAt
+                    id status progress score(format: POINT_10_DECIMAL) updatedAt createdAt
                     completedAt { year month day }
                     startedAt { year month day }
                     media { ${this.FIELDS} }
@@ -425,7 +436,11 @@ const AniList = {
         const decls = ['$mediaId: Int', '$progress: Int', '$status: MediaListStatus'];
         const args = ['mediaId: $mediaId', 'progress: $progress', 'status: $status'];
         const vars = { mediaId, progress, status };
-        if (typeof ex.score === 'number' && ex.score >= 0) { decls.push('$score: Float'); args.push('score: $score'); vars.score = ex.score; }
+        /* scoreRaw is always 0–100 regardless of the profile's
+           display scale, so a 0–10 slider value converts exactly
+           (8.5 -> 85). A bare Float score would follow the profile
+           scale instead — 8.5 on a 100-point profile saves as 8.5. */
+        if (typeof ex.score === 'number' && ex.score >= 0) { decls.push('$scoreRaw: Int'); args.push('scoreRaw: $scoreRaw'); vars.scoreRaw = Math.round(ex.score * 10); }
         if (ex.notes) { decls.push('$notes: String'); args.push('notes: $notes'); vars.notes = ex.notes; }
         if (ex.startedAt) { decls.push('$startedAt: FuzzyDateInput'); args.push('startedAt: $startedAt'); vars.startedAt = ex.startedAt; }
         if (ex.completedAt) { decls.push('$completedAt: FuzzyDateInput'); args.push('completedAt: $completedAt'); vars.completedAt = ex.completedAt; }
@@ -521,17 +536,34 @@ const Trackers = {
         return out;
     },
 
-    async simklSaveProgress(clientId, token, t, progress) {
+    /* Simkl progress (+ optional status). History uses the nested
+       seasons shape Simkl documents; status goes through
+       /sync/add-to-list, which history alone never changes. Both
+       responses are checked — previously a failed request still
+       reported "history saved ✓" because fetch only throws on
+       network errors, never on HTTP errors. */
+    async simklSaveProgress(clientId, token, t, progress, status) {
         const ids = {};
         if (t.malId) ids.mal = t.malId;
         if (t.anilistId) ids.anilist = t.anilistId;
-        const episodes = [];
-        for (let i = 1; i <= progress; i++) episodes.push({ number: i });
-        await fetch(this.SIMKL_API + '/sync/history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId },
-            body: JSON.stringify({ shows: [{ title: t.title, ids, seasons: [{ number: 1, episodes }] }] })
-        });
+        const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId };
+        if (status) {
+            const simklStatusMap = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plantowatch', 'On Hold': 'hold', 'Dropped': 'dropped', 'Rewatching': 'watching' };
+            const rStatus = await fetch(this.SIMKL_API + '/sync/add-to-list', {
+                method: 'POST', headers,
+                body: JSON.stringify({ shows: [{ to: simklStatusMap[status] || 'watching', title: t.title, ids }] })
+            });
+            if (!rStatus.ok) throw new Error('Simkl status update failed (' + rStatus.status + ')');
+        }
+        if (progress > 0) {
+            const episodes = [];
+            for (let i = 1; i <= progress; i++) episodes.push({ number: i });
+            const rHist = await fetch(this.SIMKL_API + '/sync/history', {
+                method: 'POST', headers,
+                body: JSON.stringify({ shows: [{ title: t.title, ids, seasons: [{ number: 1, episodes }] }] })
+            });
+            if (!rHist.ok) throw new Error('Simkl history update failed (' + rHist.status + ')');
+        }
     },
 
     /* MAL: parse an api.myanimelist.net v2 animelist response

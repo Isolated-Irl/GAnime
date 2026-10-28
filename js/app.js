@@ -2089,8 +2089,12 @@ const App = {
         /* Refresh/new-tab path: the title was a placeholder —
            fetch the real record and re-render in place. The
            screen/id guard stops a stale fetch repainting a
-           screen the user has already left. */
-        if (!t || t.isPlaceholder) {
+           screen the user has already left. A title seeded from
+           Continue Watching / Local / a restored session carries
+           no malId, so it heals the same way — otherwise MAL
+           scrobbling silently skips it and the editor reports
+           "no MAL id for this title". */
+        if (!t || t.isPlaceholder || !t.malId) {
             this.ensureTitle(id).then(full => {
                 if (full && !full.isPlaceholder && this.currentScreen === 'screen-details' && this.currentTitleId === id) {
                     this.loadEpisodeData(full);
@@ -2273,12 +2277,33 @@ const App = {
     },
     toggleWatchedEp(titleId, n) {
         const t = this.titleById(titleId);
-        const meta = t ? {
-            title: t.title, poster: t.poster || '', cover: t.cover || '',
-            total: t.eps || 0, anilistId: t.anilistId || null,
-            year: t.year || '', hue: t.hue || 210
-        } : null;
-        Storage.toggleWatched(titleId, n, meta);
+        if (!t) return;
+        const meta = this.titleMeta(t);
+        /* Unmarking must work on tracker-sourced progress too: the
+           eye used to toggle local only, but the display merges
+           tracker progress — so a tracker-sourced episode could
+           never be unmarked (tapping it just re-added it locally,
+           or the tracker merge put it straight back). Seed local
+           from the merged list first, then update the in-memory
+           tracker entry so the eye stays off until the push lands.
+           Note: trackers store progress as a count, not a set, so
+           unmarking a middle episode still refills from the count
+           on the next fetch — top-down unmarks and clear-all are
+           the ones that stick. */
+        const effective = this.getEffectiveWatchedEps(t);
+        const isWatched = effective.includes(n);
+        const nextEps = isWatched ? effective.filter(x => x !== n) : effective.concat(n).sort((a, b) => a - b);
+        Storage.setWatchedEps(titleId, nextEps, meta);
+        const newProg = nextEps.length ? Math.max.apply(null, nextEps) : 0;
+        if (newProg === 0) Storage.setUnwatched(titleId, true);
+        else Storage.setUnwatched(titleId, false);
+        if (this.trackingLists) {
+            Object.values(this.trackingLists).forEach(g => (g.entries || []).forEach(e => {
+                if (e.media && (e.media.id === t.id || (t.anilistId && e.media.anilistId === t.anilistId))) {
+                    e.progress = newProg;
+                }
+            }));
+        }
         this.renderDetails();
         this.pushAnilistProgress(t);
     },
@@ -2398,7 +2423,7 @@ const App = {
     titleMeta(t) {
         return t ? {
             title: t.title, poster: t.poster || '', cover: t.cover || '',
-            total: t.eps || 0, anilistId: t.anilistId || null,
+            total: t.eps || 0, anilistId: t.anilistId || null, malId: t.malId || null,
             year: t.year || '', hue: t.hue || 210, type: t.type || 'TV'
         } : null;
     },
@@ -2682,10 +2707,21 @@ const App = {
         if (!t) return;
         const total = t.type === 'Movie' ? 1 : (t.eps || 0);
         const localCount = ((Storage.getWatched()[t.id] || {}).eps || []).length;
+        /* AniList fields read AniList's own list only: the displayed
+           slot may hold another provider's list (e.g. the Simkl
+           tab), and loading that entry into AniList's fields mixed
+           the two trackers. Simkl fields read Simkl's own cache. */
         let alEntry = null;
-        if (this.trackingLists) {
+        if (this.trackingLists && this.trackingListsProvider === 'AniList') {
             Object.values(this.trackingLists).forEach(g => (g.entries || []).forEach(e => {
                 if (e.media && e.media.id === t.id) alEntry = e;
+            }));
+        }
+        let skEntry = null;
+        const skCache = this.trackingCache && this.trackingCache['Simkl'];
+        if (skCache && skCache.lists) {
+            Object.values(skCache.lists).forEach(g => (g.entries || []).forEach(e => {
+                if (e.media && (e.media.id === t.id || (t.anilistId && e.media.anilistId === t.anilistId))) skEntry = e;
             }));
         }
         const statusMap = { CURRENT: 'Watching', COMPLETED: 'Completed', PLANNING: 'Plan to Watch', PAUSED: 'On Hold', DROPPED: 'Dropped', REPEATING: 'Rewatching' };
@@ -2708,7 +2744,7 @@ const App = {
                 score: alEntry && alEntry.score ? alEntry.score : 0,
                 start: '', finish: '', notes: '', dirty: false
             },
-            simkl: { status: 'Watching', progress: localCount, score: 0, memo: '', priv: false, dirty: false },
+            simkl: { status: skEntry ? (statusMap[skEntry.status] || 'Watching') : 'Watching', progress: skEntry ? (skEntry.progress || 0) : localCount, score: 0, memo: '', priv: false, dirty: false },
             mal: {
                 status: malEntry ? (malStatusMap[malEntry.status] || 'Watching') : 'Watching',
                 progress: malEntry ? (malEntry.progress || 0) : localCount,
@@ -2903,7 +2939,7 @@ const App = {
             const sk = Storage.getSimklConn();
             if (sk && sk.accessToken) {
                 try {
-                    await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress);
+                    await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress, d.simkl.status);
                     d.results.simkl = { ok: true, msg: 'Simkl — history saved ✓' };
                     d.simkl.dirty = false;
                     /* Same invalidation the AniList and MAL blocks
@@ -4126,10 +4162,17 @@ const App = {
                 const res = await fetch(relay + '/exchange/mal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }) });
                 const data = await res.json();
                 if (!res.ok || !data.access_token) throw new Error((data && (data.error || data.message)) || 'MAL exchange failed');
-                // @name fills in on the first relay list load
-                // (/mal/me); the token alone already marks the card
-                // connected.
-                Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: null });
+                /* Fetch the profile at connect time (the relay's
+                   /mal/me): previously @name only filled in on the
+                   first MAL tab visit, so the Tracking card showed
+                   "Connected" with no name until then. A failed
+                   profile fetch keeps user null — the first tab
+                   load still fills it in, as before. */
+                const me = await this._malRelayPost('/mal/me', { access_token: data.access_token });
+                const malUser = (me.ok && me.data && me.data.name)
+                    ? { id: me.data.id || '', name: me.data.name, avatar: me.data.picture || '' }
+                    : null;
+                Storage.saveMalConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, user: malUser });
             }
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.settingsPage = 'tracking';
@@ -4492,7 +4535,12 @@ const App = {
         const active = this.activeTrackerName();
         if (active === 'Local') return null;
         if (!force && this.trackingLists && this.trackingListsProvider === active && Date.now() - this.trackingListsAt < 60000) return this.trackingLists;
-        if (this.trackingFetch) return this.trackingFetch;
+        /* Reuse an in-flight fetch only when it is for the same
+           provider: a tab switch mid-flight used to wait on the
+           wrong provider's answer (and force was ignored, so a
+           connect-time refresh could return a stale fetch). */
+        if (!force && this.trackingFetch && this.trackingFetchProvider === active) return this.trackingFetch;
+        this.trackingFetchProvider = active;
         /* A fetch that's actually starting clears the previous
            provider's error (placed after the guards, so a cached
            return or an in-flight fetch never wipes anything). */
