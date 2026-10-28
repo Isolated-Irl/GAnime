@@ -2667,7 +2667,8 @@ const App = {
        ruling: take the design as-is, edits on request), skinned
        to GAnime and wired to REAL pushes only: AniList saves
        progress/status/score/dates/notes via its API; Simkl
-       saves watched history; MAL is honestly read-only here.
+       saves watched history; MAL saves status/episodes via the
+       relay (scrobbling live since 2026-10-28).
        Save stays disabled until something is actually dirty,
        and every service reports its own result. */
     _teDraft: null,
@@ -2684,6 +2685,17 @@ const App = {
             }));
         }
         const statusMap = { CURRENT: 'Watching', COMPLETED: 'Completed', PLANNING: 'Plan to Watch', PAUSED: 'On Hold', DROPPED: 'Dropped', REPEATING: 'Rewatching' };
+        /* MAL entry: the MAL list cache (persisted) holds this
+           title's MAL status/progress, matched by AniList id or
+           MAL id — MAL's own statuses have no Rewatching. */
+        let malEntry = null;
+        const malCache = Storage.getMalConn();
+        if (malCache && malCache.listsCache) {
+            Object.values(malCache.listsCache).forEach(g => (g.entries || []).forEach(e => {
+                if (e.media && (e.media.id === t.id || (t.malId && e.media.malId === t.malId))) malEntry = e;
+            }));
+        }
+        const malStatusMap = { CURRENT: 'Watching', COMPLETED: 'Completed', PLANNING: 'Plan to Watch', PAUSED: 'On Hold', DROPPED: 'Dropped' };
         this._teDraft = {
             titleId: t.id, total,
             anilist: {
@@ -2693,6 +2705,11 @@ const App = {
                 start: '', finish: '', notes: '', dirty: false
             },
             simkl: { status: 'Watching', progress: localCount, score: 0, memo: '', priv: false, dirty: false },
+            mal: {
+                status: malEntry ? (malStatusMap[malEntry.status] || 'Watching') : 'Watching',
+                progress: malEntry ? (malEntry.progress || 0) : localCount,
+                dirty: false
+            },
             results: {}
         };
         this.renderTrackingEditor();
@@ -2701,7 +2718,7 @@ const App = {
     _teDirtyCount() {
         const d = this._teDraft;
         if (!d) return 0;
-        return (d.anilist.dirty ? 1 : 0) + (d.simkl.dirty ? 1 : 0);
+        return (d.anilist.dirty ? 1 : 0) + (d.simkl.dirty ? 1 : 0) + (d.mal.dirty ? 1 : 0);
     },
 
     _teSyncFooter() {
@@ -2728,8 +2745,11 @@ const App = {
         const malConn = Storage.getMalConn();
         const alOk = !!(alConn && alConn.accessToken);
         const skOk = !!(skConn && skConn.accessToken);
+        const malOk = !!(malConn && malConn.accessToken);
         const statuses = ['Watching', 'Completed', 'Plan to Watch', 'On Hold', 'Dropped', 'Rewatching'];
         const statusOpts = sel => statuses.map(s => `<option value="${s}" ${sel === s ? 'selected' : ''}>${s}</option>`).join('');
+        const malStatuses = ['Watching', 'Completed', 'Plan to Watch', 'On Hold', 'Dropped'];
+        const malOpts = sel => malStatuses.map(s => `<option value="${s}" ${sel === s ? 'selected' : ''}>${s}</option>`).join('');
         const resLine = key => d.results[key] ? `<div class="te-result ${d.results[key].ok ? 'ok' : 'err'}">${this._escEp(d.results[key].msg)}</div>` : '';
         const epRow = (svc, val) => `
             <div class="te-row">
@@ -2786,11 +2806,20 @@ const App = {
                 <div class="te-card-head">
                     <span class="te-brand mal">MAL</span>
                     <span class="te-name">MyAnimeList</span>
-                    <span class="te-readonly">Read-only</span>
                     <span class="te-conn">${malConn && malConn.user ? '@' + this.esc(malConn.user.name) : (malConn && malConn.accessToken ? 'Connected' : 'Not Connected')}</span>
                     ${t.malId ? `<button class="btn-mini" onclick="window.open('https://myanimelist.net/anime/${t.malId}', '_blank')">Open ↗</button>` : ''}
+                    ${malOk ? '' : '<button class="btn-mini" onclick="App.closeModal(); App.connectMalOneClick()">Connect</button>'}
                 </div>
-                <div class="te-note">MAL sync is read-only in this app (OAuth write token required). Track and sync your progress via AniList or Simkl.</div>
+                ${malOk ? `
+                <div class="te-grid">
+                    <div>
+                        <div class="te-label">Status</div>
+                        <select class="setting-select" onchange="App._teSet('mal','status', this.value)">${malOpts(d.mal.status)}</select>
+                    </div>
+                </div>
+                ${epRow('mal', d.mal.progress)}
+                <div class="te-note">Only status and watched episodes are pushed to MAL from this editor.</div>` : ''}
+                ${resLine('mal')}
             </div>
             <div class="te-card">
                 <div class="te-card-head">
@@ -2878,6 +2907,31 @@ const App = {
                 }
             } else {
                 d.results.simkl = { ok: false, msg: 'Simkl — not connected' };
+            }
+        }
+        if (d.mal.dirty) {
+            const ml = Storage.getMalConn();
+            if (ml && ml.accessToken && t.malId) {
+                try {
+                    const malApiStatus = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plan_to_watch', 'On Hold': 'on_hold', 'Dropped': 'dropped' };
+                    const malBody = { access_token: ml.accessToken, anime_id: t.malId, status: malApiStatus[d.mal.status] || 'watching', num_watched_episodes: d.mal.progress };
+                    let r = await this._malRelayPost('/mal/update', malBody);
+                    if (!r.ok && r.status === 401) {
+                        const fresh = await this._malRefreshAccess(ml);
+                        if (fresh) r = await this._malRelayPost('/mal/update', { ...malBody, access_token: fresh });
+                    }
+                    if (!r.ok) throw new Error((r.data && (r.data.error || r.data.message)) || 'save failed');
+                    d.results.mal = { ok: true, msg: 'MAL — saved ✓' };
+                    d.mal.dirty = false;
+                    this.trackingListsAt = 0;
+                    Object.values(this.trackingCache).forEach(e => { e.at = 0; });
+                } catch (e) {
+                    d.results.mal = { ok: false, msg: 'MAL — ' + ((e && e.message) || 'save failed') };
+                }
+            } else if (!t.malId) {
+                d.results.mal = { ok: false, msg: 'MAL — no MAL id for this title' };
+            } else {
+                d.results.mal = { ok: false, msg: 'MAL — not connected' };
             }
         }
         this.renderTrackingEditor();
