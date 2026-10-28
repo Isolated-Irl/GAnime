@@ -5500,7 +5500,7 @@ const App = {
         const chips = ['ALL'].concat(statuses).map(k => {
             const label = k === 'ALL' ? 'All' : k;
             const count = k === 'ALL' ? ids.filter(id => lib[id].status).length : counts[k];
-            return `<button class="ftab ${filter === k ? 'active' : ''}" onclick="App.setLocalLibFilter('${k}')">${this.statusIconSVG(k)}${label} · ${count}</button>`;
+            return `<button class="ftab ${filter === k ? 'active' : ''}" onclick="App.setLocalLibFilter('${k}')">${label} · ${count}</button>`;
         }).join('');
         const watchedMap = Storage.getWatched();
         const entryTitle = id => {
