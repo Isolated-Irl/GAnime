@@ -798,6 +798,31 @@ const Player = {
             }
         } catch (e) {}
         try { this._syncMoviTheme(); setTimeout(() => this._syncMoviTheme(), 900); } catch (e) {}
+        /* Torrentio resolve: /resolve/ links are redirects the
+           browser player cannot follow (generic "can't load"
+           error), while direct links play fine. Resolve first
+           via the relay — it returns only the Location header,
+           video never passes through it — and hand Movi the
+           final URL. Any failure keeps the original link.
+           Placed AFTER the fullscreen request above (that call
+           must stay inside the click gesture) and BEFORE Movi
+           gets its src below. currentUrl/_rawUrl stay the
+           original link (sources list, external handoff, copy). */
+        let playUrl = url;
+        if (url.startsWith('https://torrentio.strem.fun/resolve/')) {
+            try {
+                const relay = (typeof Config !== 'undefined' && Config.OAUTH && Config.OAUTH.RELAY_URL) || '';
+                if (relay) {
+                    const r = await fetch(relay + '/resolve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url }),
+                    });
+                    const d = await r.json().catch(() => ({}));
+                    if (r.ok && typeof d.location === 'string' && d.location.startsWith('https://')) playUrl = d.location;
+                }
+            } catch (e) { /* fall back to the original link */ }
+        }
         /* Closed while waiting for the CDN? Do not start playback
            on a torn-down player. */
         if (!this.movi || this.currentUrl !== url) return;
@@ -838,7 +863,7 @@ const Player = {
         try { mp.addEventListener('waiting', this._waitHandler); } catch (e) {}
         try { mp.addEventListener('stalled', this._waitHandler); } catch (e) {}
 
-        try { mp.setAttribute('src', url); } catch (e) { try { mp.src = url; } catch (e2) {} }
+        try { mp.setAttribute('src', playUrl); } catch (e) { try { mp.src = playUrl; } catch (e2) {} }
         try { if (typeof mp.load === 'function') mp.load(); } catch (e) {}
         try {
             const p = (typeof mp.play === 'function') ? mp.play() : null;
@@ -1419,15 +1444,48 @@ const Player = {
         }
     },
 
+    /* Link probe (diagnostic, Torrentio [TB+] failure): when
+       playback errors, say WHY on screen instead of only the
+       generic "can't load" line. First a Range fetch (2 bytes,
+       aborted as soon as headers arrive — never a full
+       download); if that throws, a no-cors fetch separates
+       "server blocks website reads (CORS)" from "link
+       unreachable". The _probing guard stops duplicate probes
+       for one error box; close() clears it so reopening the
+       same stream re-probes. */
+    async _probe(url) {
+        const attempt = async (opts) => {
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), 12000);
+            try { const r = await fetch(url, { ...opts, signal: ac.signal }); return r.status || 200; }
+            catch (e) { return 0; }
+            finally { clearTimeout(timer); ac.abort(); }
+        };
+        const s = await attempt({ headers: { Range: 'bytes=0-1' } });
+        if (s >= 200 && s < 400) return 'Link opens fine (HTTP ' + s + ') → likely a video format problem.';
+        if (s) return 'Server answered with an error (HTTP ' + s + ') → bad or expired link/key.';
+        const o = await attempt({ mode: 'no-cors' });
+        return o ? 'Link works, but the server does not allow websites to read it (CORS) → this is the problem.'
+                 : 'Link could not be reached at all → network/ISP block, or the link is dead.';
+    },
+
     showError() {
         this._showMsg(`
             <div><b>Unable to play media.</b></div>
             <p style="margin:6px 0">This browser may not support this video's codec (common with HEVC/AV1 torrent encodes).
             Send the same link to an external player instead — VLC plays nearly everything:</p>
+            <p id="gpProbe" style="margin:6px 0;opacity:.8">Checking the link…</p>
             <div>
                 <button class="btn-primary" onclick="Player.openExternal()">⤢ Open in external player</button>
                 <button class="btn-secondary" onclick="Player.copyLink()">Copy link</button>
             </div>`);
+        /* Probe kick: result lands via textContent (never
+           innerHTML), so a hostile link cannot inject markup. */
+        const u = this.currentUrl;
+        if (u && this._probing !== u) {
+            this._probing = u;
+            this._probe(u).then(txt => { const el = document.getElementById('gpProbe'); if (el) el.textContent = txt; });
+        }
     },
 
     /* ---------- Episode popup (dark-glass overlay) ---------- */
@@ -1737,6 +1795,7 @@ const Player = {
             overlay.innerHTML = '';
         }
         this.currentUrl = '';
+        this._probing = null;
         this._skipIntervals = [];
         this._restoreLayout();
     },
