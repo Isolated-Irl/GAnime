@@ -1032,6 +1032,7 @@ const App = {
     calPool: null,        // live entries grouped by LOCAL DATE (YYYY-MM-DD); null = no data yet (skeletons)
     calLoading: false,      // a calendar fetch is in flight (prevents dupes)
     _calPoolAt: 0,          // when the shown pool was fetched / cached (drives the 30min rule mid-session)
+    _calPoolWeek: '',       // Monday date-key of the week the pool covers (pools are per-week now)
     _calStale: false,       // cached pool older than 30min — show it, refresh behind it
     calFailed: false,       // last calendar fetch failed — tab visits retry, footer offers Retry
     calWeekOffset: 0,     // 0 = this week, -1 = last week, +1 = next week…
@@ -1044,14 +1045,23 @@ const App = {
         return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
     },
 
+    /* Calendar rebuild (2026-10-28): pools belong to ONE shown
+       week — the Monday date-key of the week (offset weeks
+       included). A pool from another week is never rendered. */
+    _calWeekMonday() {
+        const now = new Date();
+        const monday = new Date(now);
+        monday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + this.calWeekOffset * 7);
+        monday.setHours(0, 0, 0, 0);
+        return monday;
+    },
+
     renderCalendar() {
         const root = document.getElementById('calendarRoot');
         if (!root) return;
         const now = new Date();
         if (this.calSelectedIdx === null) this.calSelectedIdx = (now.getDay() + 6) % 7;
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - ((now.getDay() + 6) % 7) + this.calWeekOffset * 7);
-        monday.setHours(0, 0, 0, 0);
+        const monday = this._calWeekMonday();
         const sunday = new Date(monday);
         sunday.setDate(monday.getDate() + 6);
         const rangeLabel = monday.toLocaleString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
@@ -1067,14 +1077,27 @@ const App = {
                 if (raw && raw.pool && typeof raw.pool === 'object') {
                     const keys = Object.keys(raw.pool);
                     const dated = !keys.length || /^\d{4}-\d{2}-\d{2}$/.test(keys[0]);
+                    /* Rebuild rule: a cached pool counts only for
+                       its own week. Old caches (no week field —
+                       the top-50 era) and other weeks' pools are
+                       discarded, never rendered. */
+                    const weekOk = raw.week === this._calDateKey(monday);
                     const age = Date.now() - (raw.at || 0);
-                    if (dated && age <= 6 * 3600 * 1000) {
+                    if (dated && weekOk && age <= 6 * 3600 * 1000) {
                         this.calPool = raw.pool;
                         this._calPoolAt = raw.at || 0;
+                        this._calPoolWeek = raw.week;
                         this._calStale = age > 30 * 60 * 1000;
                     }
                 }
             } catch (e) { /* corrupt cache — fetch fresh below */ }
+        }
+        /* A pool from another week (after calNav) never renders:
+           drop it so the strip shows skeletons while the shown
+           week's schedules load, not last week's titles. */
+        if (this.calPool && this._calPoolWeek !== this._calDateKey(monday)) {
+            this.calPool = null;
+            this._calPoolWeek = '';
         }
         /* Calendar fix (2026-10-28): staleness is re-checked on
            every render, not just at cache-load time. Before,
@@ -1177,18 +1200,27 @@ const App = {
         if (this.calLoading) return;
         this.calLoading = true;
         try {
-            const shows = await AniList.airing(50);
-            this.cacheTitles(shows);
+            /* Rebuild (2026-10-28): fetch the SHOWN week's actual
+               schedule (every episode airing that week), not the
+               top-50 popular list — the old source is why whole
+               days like Nov 4 came up empty. Window is local
+               Monday 00:00 to next Monday 00:00, as unix seconds. */
+            const monday = this._calWeekMonday();
+            const startSec = Math.floor(monday.getTime() / 1000);
+            const endSec = startSec + 7 * 86400;
+            const rows = await AniList.weekSchedules(startSec, endSec);
+            this.cacheTitles(rows.map(r => r.media));
             const grouped = {};
-            shows.forEach(t => {
-                if (!t.nextRelease) return;
-                const d = new Date(t.nextRelease);
+            rows.forEach(r => {
+                const t = r.media;
+                if (!t) return;
+                const d = new Date(r.airingAt * 1000);
                 const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
                 const key = this._calDateKey(d);
                 if (!grouped[key]) grouped[key] = [];
                 grouped[key].push({
                     name: t.title,
-                    sub: (t.nextEp ? 'EP ' + t.nextEp + ' · ' : 'Next EP · ') + time,
+                    sub: (r.episode ? 'EP ' + r.episode + ' · ' : 'Next EP · ') + time,
                     hue: t.hue, poster: t.poster, id: t.id,
                     minutes: d.getHours() * 60 + d.getMinutes()
                 });
@@ -1207,8 +1239,9 @@ const App = {
                the calendar never retried AniList again. */
             this._calPoolAt = Date.now();
             this._calStale = false;
+            this._calPoolWeek = this._calDateKey(monday);
             if (Object.keys(grouped).length) {
-                try { localStorage.setItem('ganime_cal_pool_v2', JSON.stringify({ at: Date.now(), pool: grouped })); } catch (e) {}
+                try { localStorage.setItem('ganime_cal_pool_v2', JSON.stringify({ at: Date.now(), week: this._calPoolWeek, pool: grouped })); } catch (e) {}
             }
             this.renderCalendar();
         } catch (e) {
@@ -1465,7 +1498,7 @@ const App = {
         const cw = document.getElementById('homeContinueWatching');
         if (!cw) return;
         const map = Storage.getWatched();
-        const entries = Object.keys(map)
+        let entries = Object.keys(map)
             .map(id => ({ id, eps: map[id].eps || [], meta: map[id].meta || null, updatedAt: map[id].updatedAt || 0 }))
             .filter(e => e.eps.length)
             .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1502,6 +1535,19 @@ const App = {
                 entries.sort((a, b) => b.updatedAt - a.updatedAt);
             }
         }
+        /* Completed titles leave Continue Watching (2026-10-28):
+           a finished series is not something to continue. The
+           math matches the card's own done rule (total known +
+           watched >= total); unknown totals never count as done,
+           so those titles stay. Runs after the tracker merge, so
+           a tracker push that completes a title hides it too. */
+        entries = entries.filter(e => {
+            const meta = e.meta || {};
+            const t = this.titleCache[e.id] || {};
+            const total = meta.total || t.eps || 0;
+            const watchedCount = Math.max(e.eps.length, e.trackerProgress || 0);
+            return !(total && watchedCount >= total);
+        });
         if (!entries.length) { cw.innerHTML = ''; return; }
         cw.innerHTML = `
             <div class="home-section">
@@ -1607,33 +1653,86 @@ const App = {
     },
 
     /* ---------- See-All page (rail arrow → full grid) ---------- */
+    /* See-All infinite scroll (2026-10-28): no fixed cap — the
+       rail's 18 render instantly, page 1 (50) lands behind them,
+       and every further page of 50 loads as the user scrolls
+       near the bottom, until a short/empty page ends the list.
+       Nothing is fetched all at once. */
     async openSeeAll(key) {
         const entry = this.railStore[key];
         if (!entry) return;
+        entry._seeAllToken = (entry._seeAllToken || 0) + 1;
+        this._renderSeeAll(key);
+        this.navigate('screen-seeall');
+        if (entry._seeAllDone) return;
+        await this._seeAllLoadMore(key, entry._seeAllToken);
+    },
+
+    _renderSeeAll(key) {
+        const entry = this.railStore[key];
         const box = document.getElementById('seeAllRoot');
-        const render = (items) => {
-            if (!box) return;
-            box.innerHTML = `
+        if (!entry || !box) return;
+        const items = entry.items || [];
+        let foot = '';
+        if (!entry._seeAllDone) {
+            if (entry._seeAllError) {
+                foot = `<button class="btn-secondary" style="max-width:220px; margin:18px auto; display:block" onclick="App._seeAllLoadMore('${key}')">↻ Retry</button>`;
+            } else if (typeof IntersectionObserver === 'undefined') {
+                foot = `<button class="btn-secondary" style="max-width:220px; margin:18px auto; display:block" onclick="App._seeAllLoadMore('${key}')">Load more</button>`;
+            } else {
+                foot = `<div id="seeAllSentinel" class="seeall-sentinel">Loading more…</div>`;
+            }
+        }
+        box.innerHTML = `
                 <button class="back-btn" onclick="App.goBack()">←</button>
                 <div class="panel-title" style="margin-top:14px">${entry.title}</div>
                 <div class="section-label">${items.length} TITLES</div>
-                <div class="search-grid">${items.map(t => this.posterCardHTML(t)).join('')}</div>`;
-        };
-        /* The rail's 18 render instantly; the full list lands
-           behind them. A failed fetch simply keeps the 18. */
-        render(entry.items);
-        this.navigate('screen-seeall');
-        if (entry._seeAllLoaded) return;
+                <div class="search-grid">${items.map(t => this.posterCardHTML(t)).join('')}</div>${foot}`;
+        this._observeSeeAllSentinel(key, entry._seeAllToken);
+    },
+
+    _observeSeeAllSentinel(key, token) {
+        if (this._seeAllObserver) { try { this._seeAllObserver.disconnect(); } catch (e) {} this._seeAllObserver = null; }
+        const entry = this.railStore[key];
+        if (!entry || entry._seeAllDone || entry._seeAllError || typeof IntersectionObserver === 'undefined') return;
+        const sentinel = document.getElementById('seeAllSentinel');
+        if (!sentinel || typeof sentinel !== 'object') return;
+        try {
+            this._seeAllObserver = new IntersectionObserver((es) => {
+                if (es.some(e => e.isIntersecting)) this._seeAllLoadMore(key, token);
+            });
+            this._seeAllObserver.observe(sentinel);
+        } catch (e) { /* observer unavailable — the button path covers it */ }
+    },
+
+    async _seeAllLoadMore(key, token) {
+        const entry = this.railStore[key];
+        if (!entry || entry._seeAllDone || entry._seeAllLoading) return;
+        if (token !== undefined && token !== entry._seeAllToken) return;
+        entry._seeAllLoading = true;
         try {
             const cur = AniList.currentSeason();
             const nxt = AniList.nextSeason();
-            const items = await AniList.fetchSeeAll(entry.title, cur.season, cur.year, nxt.season, nxt.year);
-            if (items && items.length) {
-                entry.items = items;
-                entry._seeAllLoaded = true;
-                render(items);
+            const page = (entry._seeAllPage || 0) + 1;
+            const items = await AniList.fetchSeeAllPage(entry.title, cur.season, cur.year, nxt.season, nxt.year, page);
+            if (this.railStore[key] !== entry || (token !== undefined && token !== entry._seeAllToken)) return;
+            if (!items) {
+                entry._seeAllDone = true; // unknown rail: nothing to page
+            } else if (items.length) {
+                entry.items = page === 1 ? items : entry.items.concat(items);
+                entry._seeAllPage = page;
+                if (items.length < 50) entry._seeAllDone = true;
+                entry._seeAllError = false;
+            } else {
+                entry._seeAllPage = page;
+                entry._seeAllDone = true; // empty page ends the list, keep what loaded
             }
-        } catch (e) { /* keep the 18 already on screen */ }
+        } catch (e) {
+            if (this.railStore[key] === entry && (token === undefined || token === entry._seeAllToken)) entry._seeAllError = true;
+        } finally {
+            entry._seeAllLoading = false;
+        }
+        if (this.railStore[key] === entry && (token === undefined || token === entry._seeAllToken)) this._renderSeeAll(key);
     },
 
     /* Fetch live data from AniList (sole source). Sample content
@@ -5350,7 +5449,6 @@ const App = {
     librarySourceTab: 'Local',
     localLibFilter: 'ALL',
     librarySortMenuOpen: false,
-    localLibFabOpen: false,
 
     setLibrarySource(src) {
         this.librarySourceTab = src;
@@ -5386,12 +5484,6 @@ const App = {
 
     setLocalLibFilter(key) {
         this.localLibFilter = key;
-        this.localLibFabOpen = false;
-        this.renderLibrary();
-    },
-
-    toggleLocalLibFab() {
-        this.localLibFabOpen = !this.localLibFabOpen;
         this.renderLibrary();
     },
 
@@ -5467,18 +5559,10 @@ const App = {
                 const t = entryTitle(id);
                 return `<div class="lib-item">${this.posterCardHTML(t)}<div class="lib-prog"><span>${lib[id].savedEps.slice().sort((a, b) => a - b).map(n => 'EP ' + n).join(' · ')}</span></div></div>`;
             }).join('')}</div>` : '';
-        const fabMinis = ['ALL'].concat(statuses).map(k => {
-            const label = k === 'ALL' ? 'All' : k;
-            const count = k === 'ALL' ? ids.filter(id => lib[id].status).length : counts[k];
-            return `<button class="lib-fab-mini ${filter === k ? 'on' : ''}" onclick="App.setLocalLibFilter('${k}')">${this.statusIconSVG(k)}${label} · ${count}</button>`;
-        }).join('');
-        const fabLabel = filter === 'ALL' ? 'All' : filter;
-        const fabHTML = `<div class="lib-fab-wrap"><div class="lib-fab-stack ${this.localLibFabOpen ? 'open' : ''}">${fabMinis}</div><button class="lib-fab" onclick="App.toggleLocalLibFab()">${this.statusIconSVG(filter)} ${fabLabel}</button></div>`;
         return `
             <div class="stream-tabs lib-status-row" style="margin-bottom:14px">${chips}</div>
             ${cards ? `<div class="search-grid">${cards}</div>` : `<p class="text-secondary">${filter === 'ALL' ? 'Nothing in your Local library yet — Add to Library on any title puts it here.' : 'No titles with this status yet.'}</p>`}
-            ${savedHTML}
-            ${fabHTML}`;
+            ${savedHTML}`;
     },
 
     renderLibrary() {

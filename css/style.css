@@ -1307,23 +1307,15 @@ body.glass-off .hero::after, body.glass-off .details-hero::after { backdrop-filt
 /* Poster episode badge: local-library cards only (posterCardHTML
    stays shared — the badge is passed in, never a global poster change). */
 .lib-ep-badge { position: absolute; right: 6px; bottom: 6px; background: rgba(16,18,24,0.87); color: #fff; border: none; border-radius: 999px; padding: 2px 8px; font-size: 13.5px; font-weight: 900; line-height: 1.4; z-index: 2; }
-/* Mobile floating status button: hidden on desktop, replaces the
-   status pills row on phones. Sits above the bottom pill nav. */
-.lib-fab-wrap { display: none; }
-.lib-fab-wrap { position: fixed; right: 16px; bottom: 100px; z-index: 140; }
-.lib-fab-stack { display: none; flex-direction: column; align-items: flex-end; gap: 8px; margin-bottom: 10px; }
-.lib-fab-stack.open { display: flex; }
-.lib-fab { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #fff; border: none; border-radius: 16px; padding: 13px 18px; font-size: 14px; font-weight: 800; box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 50%, transparent); cursor: pointer; }
-.lib-fab-mini { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; box-shadow: 0 6px 16px rgba(0,0,0,.55); white-space: nowrap; cursor: pointer; }
-.lib-fab-mini.on { background: #e5484d; border-color: #e5484d; color: #fff; }
+/* Local status pills row: visible on all sizes (the floating
+   status button is gone — Local/Cloud now matches the AniList
+   tab's pill filter on phones too). */
 @media (max-width: 640px) {
     .lib-sources { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
     .lib-sources::-webkit-scrollbar { display: none; }
     .lib-sources { gap: 6px; }
     .lib-sources .ftab { padding: 8px 14px; font-size: 13px; }
     .lib-sort-icon { margin-left: 0; width: 34px; height: 34px; }
-    .lib-status-row { display: none; }
-    .lib-fab-wrap { display: flex; flex-direction: column; align-items: flex-end; }
 }
 
 /* Streams mobile layout (2026-10-27): un-crush the header and let
@@ -1351,7 +1343,6 @@ body { min-height: 100vh; min-height: 100dvh; overscroll-behavior-y: contain; }
 .app-viewport.nav-top-pad { padding-top: calc(54px + var(--nav-height) + 24px + env(safe-area-inset-top, 0px)); }
 .floating-pill-nav.pos-bottom { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
 .floating-pill-nav.pos-top { top: calc(66px + env(safe-area-inset-top, 0px)); }
-.lib-fab-wrap { bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
 
 /* ============================================================
    Layout Phase 2 — touch (2026-10-28).
@@ -1392,3 +1383,6 @@ body { min-height: 100vh; min-height: 100dvh; overscroll-behavior-y: contain; }
     .nav-tab span { display: none; }
     .floating-pill-nav.pos-bottom { bottom: 6px; }
 }
+
+/* See-All infinite scroll sentinel (2026-10-28). */
+.seeall-sentinel { text-align: center; padding: 18px 0; color: var(--text-secondary, #999); font-size: 13px; }

@@ -69,15 +69,7 @@ const AniList = {
        comes back short (list exhausted). Unknown rail titles
        return null so the caller keeps the 18 already on screen. */
     async fetchSeeAll(title, curSeason, curYear, nextSeason, nextYear, limit) {
-        const seasonVars = (season, year) => ({ decl: '$season: MediaSeason, $year: Int', values: { season, year } });
-        const spec = {
-            'Trending Now': { args: 'sort: TRENDING_DESC', vars: null },
-            'Popular This Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(curSeason, curYear) },
-            'Upcoming Next Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(nextSeason, nextYear) },
-            'All Time Popular': { args: 'sort: POPULARITY_DESC', vars: null },
-            'Top 100 Anime': { args: 'sort: SCORE_DESC', vars: null },
-            'Top 100 Movies': { args: 'format: MOVIE, sort: SCORE_DESC', vars: null },
-        }[title];
+        const spec = this._seeAllSpec(title, curSeason, curYear, nextSeason, nextYear);
         if (!spec) return null;
         const target = limit || 100;
         const out = [];
@@ -90,6 +82,28 @@ const AniList = {
             page++;
         }
         return out;
+    },
+
+    /* One See-All page (infinite scroll, 2026-10-28): the same
+       rail filter, exactly 50 rows (AniList's perPage cap), or
+       null for an unknown rail title. Callers page until a
+       short/empty page instead of stopping at a fixed cap. */
+    async fetchSeeAllPage(title, curSeason, curYear, nextSeason, nextYear, page) {
+        const spec = this._seeAllSpec(title, curSeason, curYear, nextSeason, nextYear);
+        if (!spec) return null;
+        return this._page(spec.args, spec.vars, 50, page);
+    },
+
+    _seeAllSpec(title, curSeason, curYear, nextSeason, nextYear) {
+        const seasonVars = (season, year) => ({ decl: '$season: MediaSeason, $year: Int', values: { season, year } });
+        return {
+            'Trending Now': { args: 'sort: TRENDING_DESC', vars: null },
+            'Popular This Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(curSeason, curYear) },
+            'Upcoming Next Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(nextSeason, nextYear) },
+            'All Time Popular': { args: 'sort: POPULARITY_DESC', vars: null },
+            'Top 100 Anime': { args: 'sort: SCORE_DESC', vars: null },
+            'Top 100 Movies': { args: 'format: MOVIE, sort: SCORE_DESC', vars: null },
+        }[title] || null;
     },
 
     _cleanDesc(desc) {
@@ -196,6 +210,35 @@ const AniList = {
     },
     airing(perPage) {
         return this._page('status: RELEASING, sort: POPULARITY_DESC', null, perPage || 50);
+    },
+
+    /* Week-window schedules (calendar rebuild 2026-10-28): every
+       episode airing inside [startSec, endSec), TIME-sorted,
+       paged in 50s until a short page (cap 20 pages = 1000 rows).
+       This is what a calendar needs — the old airing() top-50
+       popular list left most days empty (Nov 4 held zero of the
+       top 50, and days past the next-episode horizon were empty
+       by construction). Media carries isAdult so the caller can
+       drop adult titles (airingSchedules has no isAdult filter). */
+    async weekSchedules(startSec, endSec) {
+        const query = `query ($page: Int, $perPage: Int, $greater: Int, $lesser: Int) {
+            Page(page: $page, perPage: $perPage) {
+                airingSchedules(airingAt_greater: $greater, airingAt_lesser: $lesser, sort: TIME) {
+                    airingAt episode media { ${this.FIELDS} isAdult }
+                }
+            }
+        }`;
+        const out = [];
+        for (let page = 1; page <= 20; page++) {
+            const data = await this._post(query, { page, perPage: 50, greater: startSec - 1, lesser: endSec });
+            const rows = (data && data.Page && data.Page.airingSchedules) || [];
+            rows.forEach(s => {
+                if (!s || !s.media || s.media.isAdult) return;
+                out.push({ airingAt: s.airingAt, episode: s.episode, media: this.mapMedia(s.media) });
+            });
+            if (rows.length < 50) break;
+        }
+        return out;
     },
 
     /* Current / next season helpers (AniList season rules). */
