@@ -562,7 +562,13 @@ const Trackers = {
         const data = (r && typeof r.json === 'function') ? await r.json().catch(() => ({})) : {};
         if (!r.ok) {
             const err = new Error('Simkl request failed (' + r.status + ') - ' + (data.error || 'error') + ': ' + (data.message || ''));
-            err.simkl = { status: r.status, error: data.error || null, message: data.message || null };
+            /* Simkl Phase 4: Retry-After rides along for the
+               limit errors, so the queue can quote it instead
+               of guessing. Header access is guarded — stubs
+               and old responses may not carry headers. */
+            let retryAfter = null;
+            try { retryAfter = (r.headers && typeof r.headers.get === 'function') ? r.headers.get('Retry-After') : null; } catch (e) {}
+            err.simkl = { status: r.status, error: data.error || null, message: data.message || null, retryAfter: retryAfter };
             throw err;
         }
         return { status: r.status, data: data };
@@ -609,44 +615,40 @@ const Trackers = {
        onDone(byMal, pending) so the caller can upgrade cards in
        place. No await on hydration here — awaiting it was what
        made the tab skeleton until every chunk landed. */
-    async simklLists(clientId, token, onDone) {
-        const { data: j } = await this._simklFetch('/sync/all-items/anime/', { clientId: clientId, token: token });
-        const items = Array.isArray(j) ? j : ((j && j.anime) || []);
+    /* One Simkl item -> the unified entry shape. Shared by
+       the full download and the Phase 5 delta merge, so the
+       two paths can never drift apart. */
+    _simklItemToEntry(item, cached) {
         const statusMap = { watching: 'CURRENT', completed: 'COMPLETED', hold: 'PAUSED', dropped: 'DROPPED', plantowatch: 'PLANNING' };
-        const malIds = items.map(x => x.show && x.show.ids && x.show.ids.mal).filter(Boolean);
-        const cached = await AniList.byMalIdsCached(malIds);
-        const out = {};
-        items.forEach(item => {
-            const st = statusMap[item.status] || 'CURRENT';
-            const ids = (item.show && item.show.ids) || {};
-            const malId = ids.mal ? parseInt(ids.mal, 10) : null;
-            const media = (malId && cached[malId]) || Object.assign({
-                id: malId ? 'mal_' + malId : 'simkl_' + (ids.simkl || ids.simkl_id || 0),
-                anilistId: null,
-                malId: malId,
-                title: (item.show && item.show.title) || 'Unknown title',
-                year: (item.show && item.show.year) || '—',
-                score: item.user_rating ? Number(item.user_rating).toFixed(1) : '—',
-                scorePct: item.user_rating ? item.user_rating * 10 : null,
-                eps: item.total_episodes_count || 0,
-                type: 'TV', poster: this.simklPosterUrl(item.show && item.show.poster), cover: '', synopsis: '', genres: [],
-                hue: ((malId || ids.simkl || ids.simkl_id || 1) * 47) % 360
-            }, { needsHydration: true });
-            const updatedTs = item.last_watched_at ? Math.floor(new Date(item.last_watched_at).getTime() / 1000) : 0;
-            const entry = {
-                entryId: ids.simkl || ids.simkl_id || malId || 0,
-                status: st,
-                progress: item.watched_episodes_count || 0,
-                score: item.user_rating || 0,
-                updatedAt: updatedTs,
-                createdAt: updatedTs,
-                completedAt: st === 'COMPLETED' ? updatedTs : 0,
-                startedAt: 0,
-                media
-            };
-            if (!out[st]) out[st] = { name: st, entries: [] };
-            out[st].entries.push(entry);
-        });
+        const st = statusMap[item.status] || 'CURRENT';
+        const ids = (item.show && item.show.ids) || {};
+        const malId = ids.mal ? parseInt(ids.mal, 10) : null;
+        const media = (malId && cached[malId]) || Object.assign({
+            id: malId ? 'mal_' + malId : 'simkl_' + (ids.simkl || ids.simkl_id || 0),
+            anilistId: null,
+            malId: malId,
+            title: (item.show && item.show.title) || 'Unknown title',
+            year: (item.show && item.show.year) || '—',
+            score: item.user_rating ? Number(item.user_rating).toFixed(1) : '—',
+            scorePct: item.user_rating ? item.user_rating * 10 : null,
+            eps: item.total_episodes_count || 0,
+            type: 'TV', poster: this.simklPosterUrl(item.show && item.show.poster), cover: '', synopsis: '', genres: [],
+            hue: ((malId || ids.simkl || ids.simkl_id || 1) * 47) % 360
+        }, { needsHydration: true });
+        const updatedTs = item.last_watched_at ? Math.floor(new Date(item.last_watched_at).getTime() / 1000) : 0;
+        return { st: st, entry: {
+            entryId: ids.simkl || ids.simkl_id || malId || 0,
+            status: st,
+            progress: item.watched_episodes_count || 0,
+            score: item.user_rating || 0,
+            updatedAt: updatedTs,
+            createdAt: updatedTs,
+            completedAt: st === 'COMPLETED' ? updatedTs : 0,
+            startedAt: 0,
+            media: media
+        } };
+    },
+    _simklKickHydration(onDone, malIds) {
         // Background hydration only when the caller wants the result
         // (App passes onDone; the paste flow doesn't — its relay fetch
         // right after does the hydration itself, so no double fetch).
@@ -656,7 +658,89 @@ const Trackers = {
                 () => { try { onDone({}, malIds); } catch (e) {} }
             );
         }
-        return out;
+    },
+    /* Simkl Phase 5: delta list sync. opts = { cursor (the
+       saved activities.anime.all ISO string), cachedLists
+       (the last grouped lists), force, onCursor }.
+       - No cursor, no cached lists, or force -> full download
+         (also the first-connect and Force-refresh cases).
+       - Else one small /sync/activities call: anime.all at or
+         before the cursor means nothing changed -> the cached
+         lists come back with no download at all.
+       - Else /sync/all-items/anime/?date_from=<cursor> and
+         only the changed items merge in (updated in place,
+         moved across status groups, new ones appended).
+       Removals are the known gap: a title dropped from Simkl
+       no longer appears in all-items, so it lingers here
+       until the next full download. Any activities/delta
+       failure falls back to the full download — the list
+       must never fail over the optimisation — except a 401,
+       which propagates so App's refresh-and-retry can run. */
+    async simklLists(clientId, token, onDone, opts) {
+        opts = opts || {};
+        const fullDownload = async () => {
+            const { data: j } = await this._simklFetch('/sync/all-items/anime/', { clientId: clientId, token: token });
+            const items = Array.isArray(j) ? j : ((j && j.anime) || []);
+            const malIds = items.map(x => x.show && x.show.ids && x.show.ids.mal).filter(Boolean);
+            const cached = await AniList.byMalIdsCached(malIds);
+            const out = {};
+            items.forEach(item => {
+                const built = this._simklItemToEntry(item, cached);
+                if (!out[built.st]) out[built.st] = { name: built.st, entries: [] };
+                out[built.st].entries.push(built.entry);
+            });
+            this._simklKickHydration(onDone, malIds);
+            /* Cursor from server time, not the client clock:
+               the newest last_watched_at among the items. A
+               client clock running ahead would otherwise pin
+               the cursor in the future and freeze delta sync
+               at "unchanged" forever. Empty lists set nothing
+               (next load full-downloads again — safe). */
+            let maxMs = 0;
+            items.forEach(item => { const t = item.last_watched_at ? Date.parse(item.last_watched_at) : NaN; if (!isNaN(t) && t > maxMs) maxMs = t; });
+            if (maxMs && typeof opts.onCursor === 'function') { try { opts.onCursor(new Date(maxMs).toISOString()); } catch (e) {} }
+            return out;
+        };
+        if (!opts.force && opts.cursor && opts.cachedLists) {
+            try {
+                const { data: act } = await this._simklFetch('/sync/activities', { clientId: clientId, token: token });
+                const animeAll = act && act.anime && act.anime.all;
+                const animeMs = animeAll ? Date.parse(animeAll) : NaN;
+                if (!isNaN(animeMs)) {
+                    if (animeMs <= Date.parse(opts.cursor)) return opts.cachedLists;
+                    const { data: dj } = await this._simklFetch('/sync/all-items/anime/?date_from=' + encodeURIComponent(opts.cursor), { clientId: clientId, token: token });
+                    const changed = Array.isArray(dj) ? dj : ((dj && dj.anime) || []);
+                    const malIds = changed.map(x => x.show && x.show.ids && x.show.ids.mal).filter(Boolean);
+                    const cached = await AniList.byMalIdsCached(malIds);
+                    const merged = {};
+                    Object.keys(opts.cachedLists).forEach(g => {
+                        const grp = opts.cachedLists[g];
+                        merged[g] = { name: (grp && grp.name) || g, entries: ((grp && grp.entries) || []).slice() };
+                    });
+                    changed.forEach(item => {
+                        const built = this._simklItemToEntry(item, cached);
+                        const ids = (item.show && item.show.ids) || {};
+                        const simklId = ids.simkl || ids.simkl_id || null;
+                        const malId = ids.mal ? parseInt(ids.mal, 10) : null;
+                        let found = null;
+                        Object.keys(merged).forEach(g => {
+                            if (found) return;
+                            const idx = merged[g].entries.findIndex(e => e && ((simklId && e.entryId === simklId) || (malId && e.media && e.media.malId === malId)));
+                            if (idx !== -1) found = { g: g, idx: idx };
+                        });
+                        if (found) merged[found.g].entries.splice(found.idx, 1);
+                        if (!merged[built.st]) merged[built.st] = { name: built.st, entries: [] };
+                        merged[built.st].entries.push(built.entry);
+                    });
+                    this._simklKickHydration(onDone, malIds);
+                    if (typeof opts.onCursor === 'function') { try { opts.onCursor(animeAll); } catch (e) {} }
+                    return merged;
+                }
+            } catch (e) {
+                if (e && e.simkl && e.simkl.status === 401) throw e;
+            }
+        }
+        return fullDownload();
     },
 
     /* Simkl progress (+ optional status) in ONE history call.
@@ -685,28 +769,112 @@ const Trackers = {
             show.seasons = [{ number: 1, episodes }];
         }
         if (!show.status && !show.seasons) return; // nothing to send
-        /* Simkl Phase 1: the helper carries the identification
-           params and parses the body; the error is rethrown with
-           Simkl's own error + message, and a 200 that could not
-           match the title is a failure, not a success. A network
-           failure has no .simkl and passes through untouched. */
-        let res;
-        try {
-            res = await this._simklFetch('/sync/history', { clientId: clientId, token: token, method: 'POST', body: { shows: [show] } });
-        } catch (e) {
-            if (e && e.simkl) {
-                const s = e.simkl;
-                /* Simkl Phase 2: the message stays human-readable,
-                   but the structured error rides along — App's
-                   401 path needs the status, not a string parse. */
-                const err = new Error('Simkl history update failed (' + s.status + ') - ' + (s.error || 'error') + ': ' + (s.message || ''));
-                err.simkl = s;
-                throw err;
-            }
-            throw e;
+        /* Simkl Phase 4: saves go through the write queue
+           (serialised, batched, rate-limit aware) instead of
+           firing straight at the API. The promise resolves
+           when this title's batched POST lands, so callers
+           keep the same await-and-catch contract. */
+        return new Promise((resolve, reject) => {
+            this._simklEnqueueWrite({ clientId: clientId, token: token, show: show, resolve: resolve, reject: reject });
+        });
+    },
+
+    /* Simkl Phase 4: the write queue. Rapid marks used to
+       fire a POST per title with no spacing, so Simkl could
+       429 the burst; now saves collect for a short window
+       into ONE history call (shows: [...]), POSTs stay
+       >=1.1s apart, and limit responses get the spec's
+       treatment instead of a bare failure. Tunables are
+       fields so tests can run fast without touching the
+       production defaults. */
+    _simklPostGapMs: 1100,
+    _simklBatchWindowMs: 100,
+    _simklRetryMs: { rateLimit: 1200, rateLimit400: 2000, backoff: [1000, 2000, 4000] },
+    _simklWriteStopMs: 600000,
+    _simklWriteQueue: [],
+    _simklWriteTimer: null,
+    _simklLastPostAt: 0,
+    _simklWriteStoppedUntil: 0,
+    _simklSleep(ms) { return new Promise(r => setTimeout(r, ms)); },
+    _simklEnqueueWrite(job) {
+        if (this._simklWriteStoppedUntil > Date.now()) {
+            const mins = Math.ceil((this._simklWriteStoppedUntil - Date.now()) / 60000);
+            job.reject(new Error('Simkl writes paused for ' + mins + ' more minute(s) (rate limit 412) — retry later'));
+            return;
         }
-        const nf = res.data && res.data.not_found;
-        if (nf && nf.shows && nf.shows.length) throw new Error('Simkl could not match this title');
+        this._simklWriteQueue.push(job);
+        if (!this._simklWriteTimer) this._simklWriteTimer = setTimeout(() => this._simklDrainWrites(), this._simklBatchWindowMs);
+    },
+    async _simklDrainWrites() {
+        this._simklWriteTimer = null;
+        if (!this._simklWriteQueue.length) return;
+        /* One POST, one credential: jobs on a different token
+           wait for the next drain instead of riding a call
+           they can't authenticate. */
+        const first = this._simklWriteQueue[0];
+        const batch = [];
+        const rest = [];
+        this._simklWriteQueue.forEach(j => { if (j.clientId === first.clientId && j.token === first.token) batch.push(j); else rest.push(j); });
+        this._simklWriteQueue = rest;
+        if (rest.length && !this._simklWriteTimer) this._simklWriteTimer = setTimeout(() => this._simklDrainWrites(), this._simklBatchWindowMs);
+        if (this._simklWriteStoppedUntil > Date.now()) {
+            const mins = Math.ceil((this._simklWriteStoppedUntil - Date.now()) / 60000);
+            batch.forEach(j => j.reject(new Error('Simkl writes paused for ' + mins + ' more minute(s) (rate limit 412) — retry later')));
+            return;
+        }
+        const gapWait = this._simklPostGapMs - (Date.now() - this._simklLastPostAt);
+        if (gapWait > 0) await this._simklSleep(gapWait);
+        const failAll = (err) => batch.forEach(j => j.reject(err));
+        const historyErr = (s) => {
+            const err = new Error('Simkl history update failed (' + s.status + ') - ' + (s.error || 'error') + ': ' + (s.message || ''));
+            err.simkl = s;
+            return err;
+        };
+        let attempt = 0;
+        for (;;) {
+            this._simklLastPostAt = Date.now();
+            try {
+                const res = await this._simklFetch('/sync/history', { clientId: first.clientId, token: first.token, method: 'POST', body: { shows: batch.map(j => j.show) } });
+                /* A 200 that could not match is a failure, not
+                   a success (Phase 1 behaviour). With a batch
+                   the unmatched entry can't be mapped back to
+                   one job reliably, so only a lone job takes
+                   the could-not-match error; a mixed batch
+                   resolves (the call landed). */
+                const nf = res.data && res.data.not_found;
+                if (nf && nf.shows && nf.shows.length && batch.length === 1) { failAll(new Error('Simkl could not match this title')); return; }
+                batch.forEach(j => j.resolve());
+                return;
+            } catch (e) {
+                const s = e && e.simkl;
+                if (s && s.status === 429 && s.error === 'rate_limit') {
+                    if (attempt === 0) { await this._simklSleep(this._simklRetryMs.rateLimit); attempt++; continue; }
+                    failAll(historyErr(s)); return;
+                }
+                if (s && s.status === 429 && (s.error === 'user_limit_exceeded' || s.error === 'app_limit_exceeded')) {
+                    /* Never retried: the account/app quota is
+                       gone, and hammering would only extend it. */
+                    const ra = s.retryAfter ? ' (Retry-After ' + s.retryAfter + 's)' : '';
+                    failAll(new Error('Simkl rate limit (' + s.error + ')' + ra + ': ' + (s.message || ''))); return;
+                }
+                if (s && s.status === 400 && s.error === 'RATE_LIMIT') {
+                    if (attempt === 0) { await this._simklSleep(this._simklRetryMs.rateLimit400); attempt++; continue; }
+                    failAll(historyErr(s)); return;
+                }
+                if (s && s.status === 412) {
+                    /* Stop writes for 10 minutes: the queue
+                       rejects new saves at the door until then,
+                       and the outbox retries after the window. */
+                    this._simklWriteStoppedUntil = Date.now() + this._simklWriteStopMs;
+                    failAll(new Error('Simkl writes paused for 10 minutes (rate limit 412) — retry later')); return;
+                }
+                if (s && s.status >= 500) {
+                    if (attempt < 3) { await this._simklSleep(this._simklRetryMs.backoff[attempt] || 1000); attempt++; continue; }
+                    failAll(historyErr(s)); return;
+                }
+                failAll(s ? historyErr(s) : e); return;
+            }
+        }
     },
 
     /* MAL: parse an api.myanimelist.net v2 animelist response

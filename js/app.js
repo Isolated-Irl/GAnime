@@ -2914,6 +2914,15 @@ const App = {
         const malStatuses = ['Watching', 'Completed', 'Plan to Watch', 'On Hold', 'Dropped'];
         const malOpts = sel => malStatuses.map(s => `<option value="${s}" ${sel === s ? 'selected' : ''}>${s}</option>`).join('');
         const resLine = key => d.results[key] ? `<div class="te-result ${d.results[key].ok ? 'ok' : 'err'}">${this._escEp(d.results[key].msg)}</div>` : '';
+        /* Simkl Phase 3: a plain-mark failure from earlier
+           shows here too, with its reason and a Retry — the
+           editor is where he looks when a title won't sync. */
+        const pendingNote = key => {
+            const prov = key === 'simkl' ? 'Simkl' : key === 'mal' ? 'MyAnimeList' : 'AniList';
+            const p = (typeof Tracker !== 'undefined' && Tracker._outboxReasons) ? Tracker._outboxReasons[prov] : null;
+            if (!p || p.titleId !== d.titleId) return '';
+            return `<div class="te-result err">Unsynced change — ${this._escEp((p.reason || 'Sync failed').slice(0, 120))} <button class="btn-mini" onclick="Tracker.retryOutbox().then(() => App.renderTrackingEditor())">Retry</button></div>`;
+        };
         const epRow = (svc, val) => `
             <div class="te-row">
                 <span class="te-label">Watched Episodes</span>
@@ -2963,7 +2972,7 @@ const App = {
                     <div class="te-label" style="margin-top:10px">Personal Notes</div>
                     <input type="text" class="app-input" placeholder="Add personal notes or impressions…" value="${this._escEp(d.anilist.notes)}" onchange="App._teSet('anilist','notes', this.value)">
                 </details>` : ''}
-                ${resLine('anilist')}
+                ${resLine('anilist')}${pendingNote('anilist')}
             </div>
             <div class="te-card">
                 <div class="te-card-head">
@@ -2987,7 +2996,7 @@ const App = {
                 </div>
                 ${epRow('mal', d.mal.progress)}
                 <div class="te-note">Status, watched episodes and score are pushed to MAL from this editor in one call (0 = leave your MAL score unchanged).</div>` : ''}
-                ${resLine('mal')}
+                ${resLine('mal')}${pendingNote('mal')}
             </div>
             <div class="te-card">
                 <div class="te-card-head">
@@ -3017,7 +3026,7 @@ const App = {
                     <label class="switch"><input type="checkbox" ${d.simkl.priv ? 'checked' : ''} onchange="App._teSet('simkl','priv', this.checked)"><span class="switch-track"></span></label>
                 </div>
                 <div class="te-note">Watched episodes and status changes are pushed to Simkl from this editor — score, memo and privacy are not synced yet.</div>` : ''}
-                ${resLine('simkl')}
+                ${resLine('simkl')}${pendingNote('simkl')}
             </div>
             <div class="te-footer">
                 <button class="btn-secondary" onclick="App.closeModal()">Close</button>
@@ -4918,7 +4927,26 @@ const App = {
                            background hydration upgrades them via
                            onDone (clears the in-flight flag too). */
                         this._hydrationInFlight['Simkl'] = true;
-                        lists = await this._simklCall(sk, tok => Trackers.simklLists(sk.clientId, tok, (byMal, pending) => this._onHydrationDone('Simkl', byMal, pending)));
+                        /* Simkl Phase 5: delta sync — a stored list
+                           + cursor costs one small activities call
+                           when nothing changed, and a date_from
+                           merge when it did. RAM first; on a fresh
+                           tab the TrackStore list seeds the merge.
+                           Force (post-mark refresh) still takes
+                           the full download, per the spec. */
+                        let cachedLists = (this.trackingCache['Simkl'] || {}).lists || null;
+                        if (!cachedLists && typeof TrackStore !== 'undefined') {
+                            try {
+                                const stored = await TrackStore.getList('Simkl', Storage.getActiveProfileId());
+                                if (stored) cachedLists = TrackStore.expandLists(stored.lists);
+                            } catch (e) {}
+                        }
+                        lists = await this._simklCall(sk, tok => Trackers.simklLists(sk.clientId, tok, (byMal, pending) => this._onHydrationDone('Simkl', byMal, pending), {
+                            cursor: sk.simklActivitiesAt || null,
+                            cachedLists: cachedLists,
+                            force: !!force,
+                            onCursor: (c) => { const fresh = Storage.getSimklConn(); if (fresh) Storage.saveSimklConn({ ...fresh, simklActivitiesAt: c }); }
+                        }));
                     }
                 } else if (active === 'MyAnimeList') {
                     const mal = Storage.getMalConn();
@@ -5142,6 +5170,11 @@ const App = {
         const al = Storage.getAnilistConn();
         const sk = Storage.getSimklConn();
         const ml = Storage.getMalConn();
+        /* Simkl Phase 3: a failed push used to return only
+           false, so the reason died with the attempt and the
+           Library could only say "pending". The reasons map
+           carries each failure's message to the outbox item. */
+        const reasons = {};
         const pushAl = async () => {
             if (!(al && al.accessToken && t.anilistId)) return 'skipped';
             try {
@@ -5149,7 +5182,7 @@ const App = {
                 if (!token) return false;
                 await AniList.saveProgress(token, t.anilistId, progress, status);
                 return true;
-            } catch (e) { return false; }
+            } catch (e) { reasons.AniList = (e && e.message) || 'save failed'; return false; }
         };
         const pushSk = async () => {
             if (!(sk && sk.accessToken && progress > 0)) return 'skipped';
@@ -5157,7 +5190,7 @@ const App = {
                /sync/history call (COMPLETED when finished, else
                the watching status) — progress alone left Simkl
                showing a stale status next to a fresh count. */
-            try { await this._simklCall(sk, tok => Trackers.simklSaveProgress(sk.clientId, tok, t, progress, status)); return true; } catch (e) { return false; }
+            try { await this._simklCall(sk, tok => Trackers.simklSaveProgress(sk.clientId, tok, t, progress, status)); return true; } catch (e) { reasons.Simkl = (e && e.message) || 'save failed'; return false; }
         };
         /* MAL scrobbling: the same mark, the same moment, as
            AniList/Simkl — the relay PUTs the episode count (MAL's
@@ -5174,12 +5207,15 @@ const App = {
                     if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
                 }
                 return !!r.ok;
-            } catch (e) { return false; }
+            } catch (e) { reasons.MyAnimeList = (e && e.message) || 'save failed'; return false; }
         };
         const settled = await Promise.allSettled([pushAl(), pushSk(), pushMl()]);
         const vals = settled.map(s => (s.status === 'fulfilled' ? s.value : false));
         const attempted = vals.filter(v => v !== 'skipped');
         const ok = attempted.every(v => v === true);
+        /* A false with no captured message (e.g. a missing token)
+           still gets a reason — "pending" alone never explains. */
+        ['AniList', 'Simkl', 'MyAnimeList'].forEach((p, i) => { if (vals[i] === false && !reasons[p]) reasons[p] = 'Sync failed'; });
         if (!opts || !opts.skipInvalidate) {
             this.trackingListsAt = 0;
             /* Marks change tracker data, so every cached tab goes stale:
@@ -5190,7 +5226,7 @@ const App = {
         /* Phase 6: per-provider results, so the caller can enqueue
            exactly the providers that failed (skipped = not
            applicable, never enqueued). */
-        return { attempted: attempted.length, ok, results: { AniList: vals[0], Simkl: vals[1], MyAnimeList: vals[2] } };
+        return { attempted: attempted.length, ok, results: { AniList: vals[0], Simkl: vals[1], MyAnimeList: vals[2] }, reasons: reasons };
     },
 
     /* ---------- Library (Tracking stage) ---------- */
@@ -6114,7 +6150,7 @@ const Tracker = {
             if (res && res.results) {
                 for (const provider of ['AniList', 'Simkl', 'MyAnimeList']) {
                     if (res.results[provider] === false) {
-                        try { await this.enqueueOutbox(title, progress, effStatus, provider); } catch (e) {}
+                        try { await this.enqueueOutbox(title, progress, effStatus, provider, res.reasons && res.reasons[provider]); } catch (e) {}
                     }
                 }
             }
@@ -6271,6 +6307,11 @@ const Tracker = {
        When TrackStore isn't loaded (tests), a memory map holds
        the same items for the session. */
     _outboxIds: new Set(),
+    /* Simkl Phase 3: latest failure per provider, kept in
+       memory so the Library header and the editor can show
+       the reason synchronously (TrackStore reads are async).
+       Rebuilt from stored items whenever the queue changes. */
+    _outboxReasons: {},
     _outboxCount: 0,
     _outboxSyncing: false,
     _flushing: false,
@@ -6308,8 +6349,11 @@ const Tracker = {
 
     /* Enqueue (or coalesce) one failed push. The item records
        the attempt already made by the immediate push, so its
-       first retry waits the 5s backoff instead of hammering. */
-    async enqueueOutbox(title, progress, status, provider) {
+       first retry waits the 5s backoff instead of hammering.
+       Simkl Phase 3: the failure reason rides on the item
+       (latest wins on coalesce) and in the in-memory mirror
+       the Library header reads. */
+    async enqueueOutbox(title, progress, status, provider, reason) {
         if (!title || !title.id || !provider) return null;
         const id = this._outboxId(provider, title.id);
         let attempts = 1;
@@ -6327,14 +6371,29 @@ const Tracker = {
             },
             attempts: attempts,
             nextAt: Date.now() + this._backoffMs(attempts),
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            lastError: reason || 'Sync failed'
         };
         await this._obPut(item);
         this._outboxIds.add(id);
         this._outboxCount = this._outboxIds.size;
+        this._outboxReasons[provider] = { titleId: title.id, title: title.title || '', reason: item.lastError };
         this._scheduleOutboxTick();
         this._renderSyncIndicator();
         return item;
+    },
+
+    /* Simkl Phase 3: rebuild the reason mirror from stored
+       items — providers with nothing left lose their line,
+       providers with items keep the latest one's reason. */
+    _rebuildOutboxMirror(items) {
+        const remaining = {};
+        (items || []).forEach(x => { if (x) remaining[x.provider] = x; });
+        Object.keys(this._outboxReasons).forEach(p => { if (!remaining[p]) delete this._outboxReasons[p]; });
+        Object.keys(remaining).forEach(p => {
+            const x = remaining[p];
+            this._outboxReasons[p] = { titleId: x.titleId, title: (x.payload && x.payload.title) || '', reason: x.lastError || (this._outboxReasons[p] && this._outboxReasons[p].reason) || 'Sync failed' };
+        });
     },
 
     /* Disconnecting a tracker drops its queued pushes: without
@@ -6351,6 +6410,7 @@ const Tracker = {
             }
             this._outboxCount = this._outboxIds.size;
         } catch (e) {}
+        delete this._outboxReasons[provider];
         this._renderSyncIndicator();
     },
 
@@ -6422,8 +6482,8 @@ const Tracker = {
             const deletedTitles = [];
             for (const item of items) {
                 if (!effForce && item.nextAt && item.nextAt > now) continue;
-                let ok = false;
-                try { ok = await this._pushOutboxItem(item); } catch (e) { ok = false; }
+                let ok = false, failErr = null;
+                try { ok = await this._pushOutboxItem(item); } catch (e) { ok = false; failErr = e; }
                 if (ok === true || ok === 'drop') {
                     await this._obDel(item.id);
                     this._outboxIds.delete(item.id);
@@ -6431,6 +6491,10 @@ const Tracker = {
                 } else {
                     item.attempts = (item.attempts || 0) + 1;
                     item.nextAt = Date.now() + this._backoffMs(item.attempts);
+                    /* Simkl Phase 3: a retry failure refreshes
+                       the stored reason (a 403 that became a
+                       401 must not keep showing the old text). */
+                    item.lastError = (failErr && failErr.message) || item.lastError || 'Sync failed';
                     await this._obPut(item);
                     this._outboxIds.add(item.id);
                 }
@@ -6439,6 +6503,7 @@ const Tracker = {
             this._outboxIds.clear();
             rest.forEach(x => { if (x && x.id) this._outboxIds.add(x.id); });
             this._outboxCount = rest.length;
+            this._rebuildOutboxMirror(rest);
             deletedTitles.forEach(tid => {
                 if (!rest.some(x => x.titleId === tid)) delete this._pending()[tid];
             });
@@ -6460,10 +6525,11 @@ const Tracker = {
     },
 
     /* Tap-to-retry: the next flush attempts everything, even
-       items still inside their backoff window. */
+       items still inside their backoff window. Returns the
+       flush promise so the editor can re-render after it. */
     retryOutbox() {
         this._forceNextFlush = true;
-        this.flushOutbox(false);
+        return this.flushOutbox(false);
     },
 
     _scheduleOutboxTick() {
@@ -6475,10 +6541,19 @@ const Tracker = {
     },
 
     /* Library header indicator: synced / syncing / N pending. */
+    /* Simkl Phase 3: per-provider status — the count button
+       stays, but each failed provider now names its reason
+       underneath instead of a bare "pending". */
     syncIndicatorHTML() {
         if (this._outboxSyncing) return `<span class="text-secondary">Syncing…</span>`;
         const n = this._outboxCount || 0;
-        if (n > 0) return `<button class="btn-secondary" onclick="Tracker.retryOutbox()">${n} pending — tap to retry</button>`;
+        if (n > 0) {
+            const lines = Object.keys(this._outboxReasons || {}).map(p => {
+                const r = this._outboxReasons[p];
+                return `<div class="text-secondary">${App._escEp(p)} — ${App._escEp((r.reason || 'Sync failed').slice(0, 120))}</div>`;
+            }).join('');
+            return `<button class="btn-secondary" onclick="Tracker.retryOutbox()">${n} pending — tap to retry</button>${lines}`;
+        }
         return `<span class="text-secondary">✓ Synced</span>`;
     },
     _renderSyncIndicator() {
@@ -6494,6 +6569,7 @@ const Tracker = {
             this._outboxIds.clear();
             items.forEach(x => { if (x && x.id) this._outboxIds.add(x.id); });
             this._outboxCount = items.length;
+            this._rebuildOutboxMirror(items);
         } catch (e) {}
         if (!this._outboxListeners) {
             this._outboxListeners = true;
