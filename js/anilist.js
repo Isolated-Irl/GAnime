@@ -696,7 +696,12 @@ const Trackers = {
         } catch (e) {
             if (e && e.simkl) {
                 const s = e.simkl;
-                throw new Error('Simkl history update failed (' + s.status + ') - ' + (s.error || 'error') + ': ' + (s.message || ''));
+                /* Simkl Phase 2: the message stays human-readable,
+                   but the structured error rides along — App's
+                   401 path needs the status, not a string parse. */
+                const err = new Error('Simkl history update failed (' + s.status + ') - ' + (s.error || 'error') + ': ' + (s.message || ''));
+                err.simkl = s;
+                throw err;
             }
             throw e;
         }

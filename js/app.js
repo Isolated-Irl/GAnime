@@ -3082,7 +3082,7 @@ const App = {
                        the fallback 'Watching' on an episodes-only
                        save would wrongly flip a Completed show. */
                     const statusToSend = (d.simkl.statusTouched || (d.simkl.origStatus && d.simkl.status !== d.simkl.origStatus)) ? d.simkl.status : null;
-                    await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress, statusToSend);
+                    await this._simklCall(sk, tok => Trackers.simklSaveProgress(sk.clientId, tok, t, d.simkl.progress, statusToSend));
                     d.results.simkl = { ok: true, msg: 'Simkl — history saved ✓' };
                     d.simkl.dirty = false;
                     /* Phase 5: same instant apply as AniList above
@@ -4086,9 +4086,12 @@ const App = {
         const p = conns[provider];
         if (!p) return;
         const who = p.conn.user ? this.esc(p.conn.user.name) : 'Connected';
+        /* Simkl Phase 2: a dead refresh leaves the flag behind,
+           so the Settings card says so instead of "sync is live". */
+        const syncLine = (provider === 'simkl' && p.conn.needsReconnect) ? 'login expired — reconnect to keep syncing.' : 'sync is live.';
         this.openModal(`
             <h3 class="modal-title">${p.name}</h3>
-            <p class="text-secondary">Connected as <b>${who}</b> — sync is live.</p>
+            <p class="text-secondary">Connected as <b>${who}</b> — ${syncLine}</p>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:14px">
                 ${provider === 'mal' ? `<button class="btn-secondary" onclick="App.closeModal(); App.openMalConnect()">Sync / Update</button>` : ''}
                 <button class="btn-secondary" onclick="App.closeModal(); ${p.recon}">Reconnect</button>
@@ -4375,9 +4378,15 @@ const App = {
                 const user = await Trackers.simklViewer(cid, data.access_token);
                 /* Simkl Phase 1: keep the granted scope with the
                    connection, so a read-only token is visible
-                   instead of failing writes mysteriously later. */
+                   instead of failing writes mysteriously later.
+                   Simkl Phase 2: keep the refresh token and the
+                   expiry too — without them the connection dies
+                   after ~7 days with no way back but a reconnect.
+                   expiresAt 0 means "unknown" (old conns, PIN
+                   conns): no proactive refresh, the 401 path
+                   still covers them. */
                 simklScope = data.scope || '';
-                Storage.saveSimklConn({ clientId: cid, accessToken: data.access_token, scope: simklScope, user });
+                Storage.saveSimklConn({ clientId: cid, accessToken: data.access_token, refreshToken: data.refresh_token || '', expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : 0, scope: simklScope, user });
             } else {
                 const cid = (Config.OAUTH && Config.OAUTH.MAL_CLIENT_ID) || '';
                 const verifier = saved.verifier || '';
@@ -4770,6 +4779,89 @@ const App = {
         return token;
     },
 
+    /* Simkl Phase 2: token refresh, mirroring _malRefreshAccess.
+       One refresh at a time (single-flight): Simkl rotates the
+       refresh token, so two parallel refreshes with the same old
+       token would make the second fail invalid_grant. Returns
+       the fresh token, null on a dead refresh (marks the
+       connection needsReconnect + fires the prompt once per
+       session — never silent), or false when the relay itself
+       is too old to have /simkl/refresh (404): that is a deploy
+       skew, not a dead login, so callers fall back to the
+       stored token with no flag and no prompt. */
+    async _simklRefreshAccess(sk) {
+        if (!sk || !sk.refreshToken) return null;
+        if (this._simklRefreshing) return this._simklRefreshing;
+        const relay = (Config.OAUTH && Config.OAUTH.RELAY_URL) || '';
+        this._simklRefreshing = (async () => {
+            try {
+                const res = await fetch(relay + '/simkl/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: sk.refreshToken }) });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 404) return false;
+                if (!res.ok || !data.access_token) throw new Error((data && (data.error_description || data.error)) || 'Simkl refresh failed');
+                const fresh = Storage.getSimklConn() || sk;
+                Storage.saveSimklConn({ ...fresh, accessToken: data.access_token, refreshToken: data.refresh_token || fresh.refreshToken, expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : fresh.expiresAt || 0, needsReconnect: false });
+                return data.access_token;
+            } catch (e) {
+                const cur = Storage.getSimklConn() || sk;
+                Storage.saveSimklConn({ ...cur, needsReconnect: true });
+                this._simklReconnectPrompt();
+                return null;
+            } finally {
+                this._simklRefreshing = null;
+            }
+        })();
+        return this._simklRefreshing;
+    },
+
+    /* Simkl Phase 2: the reconnect prompt — once per session, so
+       a background refresh failure never spams modals. */
+    _simklReconnectPrompt() {
+        if (this._simklReconnectPrompted) return;
+        this._simklReconnectPrompted = true;
+        try {
+            if (typeof this.openModal === 'function') {
+                this.openModal(`<h3 class="modal-title">Simkl needs reconnect</h3><p class="text-secondary">Your Simkl login expired and could not be renewed. Disconnect and reconnect Simkl in Settings → Tracking to keep syncing.</p><button class="btn-secondary" onclick="App.closeModal()">Close</button>`);
+            }
+        } catch (e2) { /* boot too early for a modal: the flag still shows in Settings */ }
+    },
+
+    /* Simkl Phase 2: proactive refresh — when the token dies
+       within the hour, renew it before the call instead of
+       letting the call 401 first. Deliberately NOT async: the
+       fast path returns the stored token as a plain value, so
+       _simklCall invokes the call synchronously (the Library's
+       stale-refresh test asserts the refresh is kicked on the
+       same render tick); only the proactive path returns a
+       promise. A failed renewal resolves null (prompt fired). */
+    _simklFreshToken(sk) {
+        if (!sk || !sk.accessToken) return null;
+        if (sk.expiresAt && sk.expiresAt - Date.now() < 3600 * 1000) {
+            return this._simklRefreshAccess(sk);
+        }
+        return sk.accessToken;
+    },
+
+    /* Simkl Phase 2: every Simkl call rides this — proactive
+       refresh first, then one 401 retry after a refresh. The
+       call itself is fn(token), so lists, saves and the outbox
+       share one retry rule instead of four copies. */
+    async _simklCall(sk, fn) {
+        let token = this._simklFreshToken(sk);
+        if (token && typeof token.then === 'function') token = await token;
+        if (token === false) token = sk.accessToken; // relay too old: stored token, no flag
+        if (!token) throw new Error('Simkl needs reconnect');
+        try {
+            return await fn(token);
+        } catch (e) {
+            if (e && e.simkl && e.simkl.status === 401) {
+                const fresh = await this._simklRefreshAccess(Storage.getSimklConn() || sk);
+                if (fresh && fresh !== false) return await fn(fresh);
+            }
+            throw e;
+        }
+    },
+
     async _fetchMalListsViaRelay(onDone) {
         const mal = Storage.getMalConn();
         if (!mal || !mal.accessToken) return null;
@@ -4826,7 +4918,7 @@ const App = {
                            background hydration upgrades them via
                            onDone (clears the in-flight flag too). */
                         this._hydrationInFlight['Simkl'] = true;
-                        lists = await Trackers.simklLists(sk.clientId, sk.accessToken, (byMal, pending) => this._onHydrationDone('Simkl', byMal, pending));
+                        lists = await this._simklCall(sk, tok => Trackers.simklLists(sk.clientId, tok, (byMal, pending) => this._onHydrationDone('Simkl', byMal, pending)));
                     }
                 } else if (active === 'MyAnimeList') {
                     const mal = Storage.getMalConn();
@@ -5065,7 +5157,7 @@ const App = {
                /sync/history call (COMPLETED when finished, else
                the watching status) — progress alone left Simkl
                showing a stale status next to a fresh count. */
-            try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress, status); return true; } catch (e) { return false; }
+            try { await this._simklCall(sk, tok => Trackers.simklSaveProgress(sk.clientId, tok, t, progress, status)); return true; } catch (e) { return false; }
         };
         /* MAL scrobbling: the same mark, the same moment, as
            AniList/Simkl — the relay PUTs the episode count (MAL's
@@ -6292,7 +6384,7 @@ const Tracker = {
                    live funnel (stored AniList enum, or derived
                    from progress/total when an old item lacks it). */
                 const skStatus = p.status || ((p.eps && p.progress >= p.eps) ? 'COMPLETED' : 'CURRENT');
-                await Trackers.simklSaveProgress(conn.clientId, conn.accessToken, t, p.progress, skStatus);
+                await App._simklCall(conn, tok => Trackers.simklSaveProgress(conn.clientId, tok, t, p.progress, skStatus));
                 return true;
             }
             if (item.provider === 'MyAnimeList') {
