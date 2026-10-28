@@ -827,14 +827,35 @@ const Sync = {
                on either side (legacy) keeps local on conflicts. */
             if ((cTs.settings || 0) > (lTs.settings || 0)) ls.settings = Object.assign({}, ls.settings || {}, cs.settings || {});
             else ls.settings = Object.assign({}, cs.settings || {}, ls.settings || {});
-            /* Addons: union by manifestUrl (or id), local wins —
-               then tombstoned addons drop unless re-installed
-               after the tombstone (addedAt beats it). */
-            const seen = new Set((ls.addons || []).map(a => a.manifestUrl || a.id));
-            (cs.addons || []).forEach(a => {
-                const key = a.manifestUrl || a.id;
-                if (key && !seen.has(key)) { seen.add(key); ls.addons.push(a); }
-            });
+            /* Addons: union by manifestUrl (or id), local wins on
+               content — then tombstoned addons drop unless
+               re-installed after the tombstone (addedAt beats
+               it). ORDER (2026-10-28 fix): the addon order is a
+               property of the LIST, not of each addon — a plain
+               union always kept the pushing device's local order
+               first, so any device that had NOT moved an addon
+               clobbered the move on its next push (the AIO
+               position never stuck across devices, even after
+               full sync removed the old local-only cause).
+               Now the side whose addon store changed most
+               recently (_ts.addons — a move stamps it via
+               saveAddons) dictates the order; the other side's
+               extra addons append after, in their own order.
+               Tie/legacy (no timestamps) keeps local order. */
+            const lAddons = ls.addons || [], cAddons = cs.addons || [];
+            const byKey = new Map();
+            lAddons.forEach(a => { const k = a.manifestUrl || a.id; if (k && !byKey.has(k)) byKey.set(k, a); });
+            cAddons.forEach(a => { const k = a.manifestUrl || a.id; if (k && !byKey.has(k)) byKey.set(k, a); });
+            const orderFrom = (cTs.addons || 0) > (lTs.addons || 0) ? cAddons : lAddons;
+            const otherSide = orderFrom === cAddons ? lAddons : cAddons;
+            const seenKeys = new Set(), ordered = [];
+            orderFrom.forEach(a => { const k = a.manifestUrl || a.id; if (k && !seenKeys.has(k)) { seenKeys.add(k); ordered.push(byKey.get(k)); } });
+            otherSide.forEach(a => { const k = a.manifestUrl || a.id; if (k && !seenKeys.has(k)) { seenKeys.add(k); ordered.push(byKey.get(k)); } });
+            /* Malformed local entries with no key at all were
+               kept by the old union (they sat in ls.addons);
+               keep them at the end rather than dropping them. */
+            lAddons.forEach(a => { if (!(a.manifestUrl || a.id)) ordered.push(a); });
+            ls.addons = ordered;
             const tombAddons = ((tomb.addons || {})[pid]) || {};
             ls.addons = (ls.addons || []).filter(a => {
                 const key = a.manifestUrl || a.id;
