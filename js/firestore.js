@@ -5,17 +5,26 @@
 // after sign-in, and a manual Sync Now in Settings → Account.
 // NEVER per second, NEVER on a timer.
 //
-// What syncs: profiles, per-profile settings, addons, watched,
-// local library, My List, episode-design preference, active profile.
-// What NEVER syncs (privacy-first, standing rules):
-//  - Tracking logins/tokens (AniList / Simkl / MAL) — reconnect
-//    those once per browser. Tokens stay in that browser only.
-//  - Firebase auth tokens (idToken / refreshToken).
-//  - Key-bearing addon URLs: any addon whose manifest URL carries
-//    a query string, a fragment, or a long token-looking path
-//    segment is left out of the cloud doc entirely (it stays
-//    local-only on that device; see _cleanAddon).
-//  - Caches (episode data, ID map, home rails, title cache).
+// What syncs: profiles, per-profile settings, addons (FULL
+// manifest URLs, keys included, since 2026-10-28), watched,
+// local library, My List, episode-design preference, active
+// profile, and tracking logins/tokens (AniList / Simkl / MAL,
+// since 2026-10-28).
+// What NEVER syncs:
+//  - Firebase auth tokens (idToken / refreshToken): each device
+//    signs in separately with the Firebase password — that login
+//    IS the gate for the whole doc (owner-only Firestore rules),
+//    so syncing session tokens would gain nothing.
+//  - Caches (episode data, ID map, home rails, title cache,
+//    TrackStore lists/outbox): re-fetchable or device-local
+//    in-flight state, not user data.
+// Full sync was user-authorized 2026-10-28 ("make all data
+// syncable including add-on with key... and all trackers"),
+// after the tradeoff was spelled out: the doc is readable only
+// by the signed-in owner, so the protection is the Firebase
+// password itself. Before that date the opposite rules held
+// (tokens + key-bearing addons stayed local-only); the code
+// below is the post-change behavior.
 //
 // Conflict rule (simple, no data loss by design):
 //  - New browser with no profiles + cloud has profiles → pull all.
@@ -70,7 +79,8 @@ const Sync = {
            addons:   { ownerPid: { manifestUrl: ts } },
            watched:  { pid: { titleId: { ep: ts } } },
            mylist:   { pid: { titleId: ts } },
-           locallib: { pid: { titleId: ts } } }
+           locallib: { pid: { titleId: ts } },
+           tracking: { pid: { provider: ts } } }
        The same shape rides in the doc as `deleted`. Merge unions
        tombstones (max timestamp wins per key); apply unions them
        into the local store (never replaces down — a pull must not
@@ -167,6 +177,16 @@ const Sync = {
                 if (!d[kind]) d[kind] = {};
                 if (!d[kind][pid]) d[kind][pid] = {};
                 d[kind][pid][key] = now;
+            } else if (kind === 'tracking') {
+                /* Tracking disconnect (2026-10-28, full sync):
+                   pid = profile, key = provider (anilist/simkl/
+                   mal). Without this, a disconnect on one device
+                   would be resurrected by the other device's
+                   copy on the next merge — the same resurrection
+                   bug tombstones fixed for profiles/addons. */
+                if (!d.tracking) d.tracking = {};
+                if (!d.tracking[pid]) d.tracking[pid] = {};
+                d.tracking[pid][key] = now;
             } else return;
             this._saveDeleted(d);
             this._dirty = true;
@@ -290,21 +310,6 @@ const Sync = {
         let json = null;
         try { json = JSON.parse(text); } catch (e) { json = null; }
         const doc = this._decodeDoc(json);
-        /* Cloud-side filter (2026-10-26 fix): a pre-fix cloud doc
-           may still hold a key-bearing addon (path tokens were
-           not filtered before). Strip such addons from the cloud
-           copy BEFORE merging, so they never re-enter a device
-           or get pushed back — the merged put then cleans the
-           cloud doc for good. Local-only addons on this device
-           are preserved separately by applyDoc. */
-        if (doc && doc.byProfile) {
-            Object.keys(doc.byProfile).forEach(pid => {
-                const s = doc.byProfile[pid];
-                if (s && Array.isArray(s.addons)) {
-                    s.addons = s.addons.map(a => this._cleanAddon(a)).filter(Boolean);
-                }
-            });
-        }
         return doc;
     },
 
@@ -397,7 +402,7 @@ const Sync = {
             if (key === 'ganime_profiles_list' || key.startsWith('ganime_profiles_')) {
                 const m = this._meta(); m.profiles = now; this._saveMeta(m);
             } else {
-                const mm = key.match(/^ganime_(settings|addons|watched|locallib|mylist)_(.+)$/);
+                const mm = key.match(/^ganime_(settings|addons|watched|locallib|mylist|tracking)_(.+)$/);
                 if (mm) this._touchMeta(mm[2], mm[1], now);
             }
         } catch (e) {}
@@ -458,30 +463,14 @@ const Sync = {
     _cleanAddon(a) {
         if (!a || typeof a !== 'object') return null;
         const url = String(a.manifestUrl || '');
-        /* Key-bearing URLs never sync: any query or fragment means
-           the addon stays local-only on this device. */
-        if (!url || url.indexOf('?') !== -1 || url.indexOf('#') !== -1) return null;
-        if (!/^https:\/\//i.test(url)) return null;
-        /* Path-segment tokens (2026-10-26 fix): some addons carry
-           a personal config token as a path segment, e.g.
-           https://pengu.uk/<token>/manifest.json — no query, no
-           fragment, but still a secret. A path segment (excluding
-           the final 'manifest.json') that is 12+ chars of letters,
-           digits, underscores or hyphens AND mixes letters with
-           digits is treated as token-looking and stays local-only.
-           Direction is fail-closed: a false positive only means
-           that addon must be installed per device, never a leak.
-           Ordinary segments (words, versions with dots) do not
-           match: dots break the charset, short words miss the
-           length, and pure words/digits miss the mix rule. */
-        try {
-            const path = url.replace(/^https?:\/\/[^\/]+/i, '').split('/').filter(Boolean);
-            path.pop();
-            for (const seg of path) {
-                if (seg.length >= 12 && /^[A-Za-z0-9_-]+$/.test(seg)
-                    && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg)) return null;
-            }
-        } catch (e) {}
+        /* Full sync (2026-10-28, user-authorized): addon URLs
+           sync EXACTLY as installed, query/fragment/path keys
+           included. Before this date this function rejected
+           key-bearing URLs; that filter is gone by his explicit
+           decision, and the cloud-side filter in _getCloud went
+           with it. What remains here is shape cleaning only:
+           https-only, safe logo, whitelisted fields. */
+        if (!url || !/^https:\/\//i.test(url)) return null;
         const logo = (typeof a.logo === 'string' && /^https?:\/\//i.test(a.logo)) ? a.logo : '';
         return {
             uid: String(a.id) + '::' + url,
@@ -524,18 +513,26 @@ const Sync = {
                 } catch (e) { return null; }
             };
             const addonsRaw = raw('ganime_addons_' + pid) || [];
+            const trackingRaw = raw('ganime_tracking_' + pid) || {};
             byProfile[pid] = {
                 settings: raw('ganime_settings_' + pid) || {},
                 addons: (Array.isArray(addonsRaw) ? addonsRaw : []).map(a => this._cleanAddon(a)).filter(Boolean),
                 watched: raw('ganime_watched_' + pid) || {},
                 locallib: raw('ganime_locallib_' + pid) || {},
                 mylist: raw('ganime_mylist_' + pid) || [],
+                /* Tracker logins, tokens included (full sync
+                   2026-10-28). Shape: { anilist?, simkl?, mal? },
+                   each conn stamped savedAt by storage.js. The
+                   Firebase session itself is never in here —
+                   collectLocal never reads FirebaseAuth. */
+                tracking: (trackingRaw && typeof trackingRaw === 'object') ? trackingRaw : {},
                 _ts: {
                     settings: this._metaFor(pid, 'settings'),
                     addons: this._metaFor(pid, 'addons'),
                     watched: this._metaFor(pid, 'watched'),
                     locallib: this._metaFor(pid, 'locallib'),
-                    mylist: this._metaFor(pid, 'mylist')
+                    mylist: this._metaFor(pid, 'mylist'),
+                    tracking: this._metaFor(pid, 'tracking')
                 }
             };
         });
@@ -588,16 +585,18 @@ const Sync = {
             Object.keys(byProfile).forEach(pid => {
                 const s = byProfile[pid] || {};
                 try { localStorage.setItem('ganime_settings_' + pid, JSON.stringify(s.settings || {})); } catch (e) {}
-                /* Addon preservation (2026-10-26 fix): the doc's
-                   addon list is FILTERED (key-bearing addons are
-                   local-only by design). A plain replace would
-                   wipe this device's local-only addons every
-                   pull. So: merged list wins on shared addons,
-                   and any local addon absent from the merged
-                   list is appended back (it is local-only) —
-                   EXCEPT a tombstoned one: a delete recorded
-                   anywhere must stay deleted, not sneak back
-                   via this preservation. */
+                /* Addon preservation (2026-10-26 fix): a plain
+                   replace would wipe this device's addons that
+                   were added after the merged doc was collected
+                   (or are absent from it for any reason). So:
+                   merged list wins on shared addons, and any
+                   local addon absent from the merged list is
+                   appended back — EXCEPT a tombstoned one: a
+                   delete recorded anywhere must stay deleted,
+                   not sneak back via this preservation. (Before
+                   full sync this also covered local-only
+                   key-bearing addons; since 2026-10-28 those
+                   sync too, so the merged list holds them.) */
                 try {
                     const mergedAddons = Array.isArray(s.addons) ? s.addons : [];
                     const mergedUrls = new Set(mergedAddons.map(a => a.manifestUrl || a.id));
@@ -616,6 +615,16 @@ const Sync = {
                 try { localStorage.setItem('ganime_watched_' + pid, JSON.stringify(s.watched || {})); } catch (e) {}
                 try { localStorage.setItem('ganime_locallib_' + pid, JSON.stringify(s.locallib || {})); } catch (e) {}
                 try { localStorage.setItem('ganime_mylist_' + pid, JSON.stringify(s.mylist || [])); } catch (e) {}
+                /* Tracker logins (full sync 2026-10-28): written
+                   wholesale from the merged doc — mergeDocs
+                   already picked the newest conn per provider
+                   and honored disconnect tombstones, so this
+                   write can only adopt a newer login or apply
+                   a disconnect, never resurrect a stale token.
+                   Call sites read conns fresh from Storage, so
+                   an adopted login takes effect without a reload
+                   (the next tracker call reads the new conn). */
+                try { localStorage.setItem('ganime_tracking_' + pid, JSON.stringify(s.tracking || {})); } catch (e) {}
                 /* Adopt the cloud store timestamps so the next
                    merge compares correctly. */
                 if (s._ts) {
@@ -653,12 +662,15 @@ const Sync = {
             + ((s.mylist || []).length)
             + Object.keys(s.settings || {}).length;
         /* Live-local consult (2026-10-26 fix): the doc's addon
-           list is FILTERED, so a profile whose only data is a
-           local-only (key-bearing) addon looks empty in the doc
-           while it is very much alive on this device. Dropping
-           it as an "empty duplicate" would delete the profile
-           (and its addon) locally on apply. So the size is the
-           max of the doc view and the live local stores. */
+           list used to be FILTERED, so a profile whose only data
+           was a local-only (key-bearing) addon looked empty in
+           the doc while it was very much alive on this device.
+           Since full sync (2026-10-28) the doc holds those
+           addons too, but the consult stays as a safety net:
+           dropping a profile that has any live-local data would
+           delete the profile (and its addon) locally on apply.
+           So the size is the max of the doc view and the live
+           local stores. */
         try {
             const raw = key => {
                 try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
@@ -844,12 +856,34 @@ const Sync = {
                 if ((cs.mylist || []).includes(title) && (cTs.mylist || 0) > t) return true;
                 return false;
             });
+            /* Tracking logins (full sync 2026-10-28): per
+               provider, the NEWEST conn wins (savedAt, stamped
+               by storage.js; missing = 0). Newest-wins matters
+               because tokens rotate: the freshest token is the
+               valid one, and an older copy must never overwrite
+               it. A disconnect tombstone beats any conn saved
+               at or before it; a re-connect (newer savedAt)
+               beats the tombstone. */
+            const tombTracking = ((tomb.tracking || {})[pid]) || {};
+            const lt = ls.tracking || {}, ct = cs.tracking || {};
+            const mergedTracking = {};
+            ['anilist', 'simkl', 'mal'].forEach(prov => {
+                const l = lt[prov], c = ct[prov];
+                const pick = (!l) ? c : (!c) ? l
+                    : ((c.savedAt || 0) >= (l.savedAt || 0) ? c : l);
+                if (!pick) return;
+                const t = tombTracking[prov];
+                if (t && (pick.savedAt || 0) <= t) return;
+                mergedTracking[prov] = pick;
+            });
+            ls.tracking = mergedTracking;
             ls._ts = {
                 settings: Math.max(lTs.settings || 0, cTs.settings || 0),
                 addons: Math.max(lTs.addons || 0, cTs.addons || 0),
                 watched: Math.max(lTs.watched || 0, cTs.watched || 0),
                 locallib: Math.max(lTs.locallib || 0, cTs.locallib || 0),
-                mylist: Math.max(lTs.mylist || 0, cTs.mylist || 0)
+                mylist: Math.max(lTs.mylist || 0, cTs.mylist || 0),
+                tracking: Math.max(lTs.tracking || 0, cTs.tracking || 0)
             };
             merged.byProfile[pid] = ls;
         });

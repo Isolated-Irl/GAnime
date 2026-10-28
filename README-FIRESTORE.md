@@ -7,15 +7,25 @@ new browser downloads them instead of asking you to create a profile.
 
 ## What syncs / what never syncs
 
-Syncs: profiles, per-profile settings, addons, watched episodes, local
-library, My List, episode-design preference, active profile.
+Syncs: profiles, per-profile settings, addons (full manifest URLs,
+keys included, since 2026-10-28), watched episodes, local
+library, My List, episode-design preference, active profile, and
+tracking logins/tokens (AniList / Simkl / MAL, since 2026-10-28 —
+newest conn per provider wins, disconnects propagate via
+tombstones).
 
-NEVER syncs (privacy-first, standing rules):
-- Tracking logins/tokens (AniList / Simkl / MAL) — reconnect once per browser.
-- Firebase auth tokens (idToken / refreshToken).
-- Key-bearing addon URLs: any addon whose manifest URL has a `?` query or
-  `#` fragment is left out of the cloud doc (it stays local-only).
-- Caches (episode data, ID map, home rails, title cache).
+NEVER syncs:
+- Firebase auth tokens (idToken / refreshToken): each device signs
+  in separately with the Firebase password — that login IS the gate
+  for the whole doc (owner-only Firestore rules), so syncing session
+  tokens would gain nothing.
+- Caches (episode data, ID map, home rails, title cache, TrackStore
+  lists/outbox): re-fetchable or device-local in-flight state.
+
+Note: before 2026-10-28, tracking tokens and key-bearing addon URLs
+stayed local-only by design. Full sync was user-authorized on that
+date after the tradeoff was spelled out: the doc is readable only by
+the signed-in owner, so the protection is the Firebase password.
 
 ## How it works (code: `js/firestore.js`)
 
@@ -78,8 +88,10 @@ restricted the key, skip this.
 3. On that second browser, mark an episode watched, wait ~10 seconds, then
    open the first browser and tap **Sync Now** — the watched episode
    should appear there.
-4. Reconnect AniList on the new browser (expected — tracking tokens do
-   not sync, by design).
+4. Tracker logins now sync too (since 2026-10-28): the second
+   browser should already be logged into the same trackers — no
+   reconnect needed. A disconnect on either browser propagates to
+   the other on the next sync.
 
 ## Rollback
 Pre-Phase-2 copies of `app.js`, `storage.js` and `index.html` are kept in

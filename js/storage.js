@@ -32,14 +32,16 @@ const Storage = {
         }
         /* Phase 2 cloud sync (2026-10-26): user-data writes mark
            the store dirty so Sync pushes a batched copy after a
-           short debounce. Tracking keys are deliberately NOT
-           matched here (tokens never sync); caches are not either.
+           short debounce. Tracking keys JOINED this list on
+           2026-10-28 (user-authorized full sync: tracker logins
+           now sync to the owner's cloud doc); caches and the
+           Firebase session itself still never match.
            Guarded for the script order (storage loads before
            firestore.js) and for applies (Sync skips while applying). */
         try {
             if (typeof Sync !== 'undefined' && Sync.markDirty
                 && (key.startsWith('ganime_profiles_')
-                    || /^ganime_(settings|addons|watched|locallib|mylist)_/.test(key))) {
+                    || /^ganime_(settings|addons|watched|locallib|mylist|tracking)_/.test(key))) {
                 Sync.markDirty(key);
             }
         } catch (e) {}
@@ -376,8 +378,18 @@ const Storage = {
     /* --- Tracking connections (per profile: ganime_tracking_<pid>) ---
        { anilist: { clientId, accessToken,
        expiresAt, user: {id, name, avatar} } } — NO client secret is
-       ever stored here (AniList implicit grant uses none); tokens
-       never leave this device except to anilist.co itself. */
+       ever stored here (AniList implicit grant uses none).
+       Since 2026-10-28 (user-authorized full sync) these logins
+       ALSO sync to the owner's cloud doc, so a new device signed
+       into the same Firebase account is already logged into the
+       trackers. The doc is owner-only (Firestore rules:
+       request.auth.uid == userId), so the gate is the Firebase
+       password itself. Firebase session tokens (idToken) never
+       sync — each device signs in separately. Each conn carries
+       savedAt (ms, stamped on save): the sync merge keeps the
+       NEWEST conn per provider, and a disconnect records a
+       tracking tombstone so it propagates instead of being
+       resurrected by the other device's copy. */
     getTracking(profileId) {
         return this._read('ganime_tracking_' + (profileId || this.getActiveProfileId()), {});
     },
@@ -389,7 +401,12 @@ const Storage = {
     },
     saveAnilistConn(conn, profileId) {
         const all = this.getTracking(profileId);
-        if (conn) all.anilist = conn; else delete all.anilist;
+        const pid = profileId || this.getActiveProfileId();
+        if (conn) all.anilist = { ...conn, savedAt: Date.now() };
+        else {
+            delete all.anilist;
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('tracking', pid, 'anilist'); } catch (e) {}
+        }
         this.saveTracking(all, profileId);
     },
 
@@ -398,7 +415,12 @@ const Storage = {
     },
     saveSimklConn(conn, profileId) {
         const all = this.getTracking(profileId);
-        if (conn) all.simkl = conn; else delete all.simkl;
+        const pid = profileId || this.getActiveProfileId();
+        if (conn) all.simkl = { ...conn, savedAt: Date.now() };
+        else {
+            delete all.simkl;
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('tracking', pid, 'simkl'); } catch (e) {}
+        }
         this.saveTracking(all, profileId);
     },
     getMalConn(profileId) {
@@ -412,10 +434,14 @@ const Storage = {
                here so no call site can re-inflate the blob by
                spreading an old conn (the blob rewrite on every
                fetch was eating token refreshes on quota errors). */
-            const clean = { ...conn };
+            const clean = { ...conn, savedAt: Date.now() };
             delete clean.listsCache;
             all.mal = clean;
-        } else delete all.mal;
+        } else {
+            delete all.mal;
+            const pid = profileId || this.getActiveProfileId();
+            try { if (typeof Sync !== 'undefined' && Sync.recordDeleted) Sync.recordDeleted('tracking', pid, 'mal'); } catch (e) {}
+        }
         this.saveTracking(all, profileId);
     },
 
