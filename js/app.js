@@ -2412,7 +2412,11 @@ const App = {
             : `background:linear-gradient(160deg, hsl(${t.hue} 62% 36%), hsl(${t.hue + 50} 70% 13%) 75%)`;
         const statusLabel = t.status ? String(t.status).replace(/_/g, ' ') : '';
         const watchedEps = this.getEffectiveWatchedEps(t);
-        const total = t.type === 'Movie' ? 1 : (t.eps || 0);
+        /* Same fallback as the episodes section and the mark button
+           below: a title object without an episode count (e.g. an
+           airing tracker entry) must not collapse nextEp to 1 while
+           the section correctly shows 4/8 from episode data. */
+        const total = t.type === 'Movie' ? 1 : (t.eps || (this.detailsUi.epData ? this.detailsUi.epData.length : 0));
         let nextEp = 1;
         while (nextEp <= total && watchedEps.includes(nextEp)) nextEp++;
         if (nextEp > total) nextEp = 1;
@@ -2902,6 +2906,11 @@ const App = {
                     await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress);
                     d.results.simkl = { ok: true, msg: 'Simkl — history saved ✓' };
                     d.simkl.dirty = false;
+                    /* Same invalidation the AniList and MAL blocks
+                       already do: without it, even a tab switch
+                       within 60 s kept showing the old progress. */
+                    this.trackingListsAt = 0;
+                    Object.values(this.trackingCache).forEach(e => { e.at = 0; });
                 } catch (e) {
                     d.results.simkl = { ok: false, msg: 'Simkl — ' + ((e && e.message) || 'save failed') };
                 }
@@ -4577,34 +4586,46 @@ const App = {
         if (!t) return;
         const eps = (Storage.getWatched()[t.id] || {}).eps || [];
         const progress = eps.length ? Math.max.apply(null, eps) : 0;
+        /* The three pushes are independent, so they run in parallel:
+           sequential awaits made every mark wait on AniList, then
+           Simkl, then the MAL relay — the slowest single push now
+           sets the wait, not the sum. A failing push still never
+           blocks the others (the local save is the truth). */
         const status = (t.eps && progress >= t.eps) ? 'COMPLETED' : 'CURRENT';
         const al = Storage.getAnilistConn();
-        if (al && al.accessToken && t.anilistId) {
-            try {
-                const token = await this.anilistAccessToken();
-                if (token) await AniList.saveProgress(token, t.anilistId, progress, status);
-            } catch (e) { /* the local save is the truth; retried next mark */ }
-        }
         const sk = Storage.getSimklConn();
-        if (sk && sk.accessToken && progress > 0) {
-            try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress); } catch (e) { /* same */ }
-        }
+        const ml = Storage.getMalConn();
+        const pushAl = async () => {
+            if (al && al.accessToken && t.anilistId) {
+                try {
+                    const token = await this.anilistAccessToken();
+                    if (token) await AniList.saveProgress(token, t.anilistId, progress, status);
+                } catch (e) { /* retried next mark */ }
+            }
+        };
+        const pushSk = async () => {
+            if (sk && sk.accessToken && progress > 0) {
+                try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress); } catch (e) { /* same */ }
+            }
+        };
         /* MAL scrobbling: the same mark, the same moment, as
            AniList/Simkl — the relay PUTs the episode count (MAL's
            update call adds the title if it is not on the list yet).
            No MAL id or no token: skip quietly, local first. A 401
            refreshes once and retries, like the list load. */
-        const ml = Storage.getMalConn();
-        if (ml && ml.accessToken && t.malId) {
-            try {
-                const malStatus = (t.eps && progress >= t.eps) ? 'completed' : 'watching';
-                let r = await this._malRelayPost('/mal/update', { access_token: ml.accessToken, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
-                if (!r.ok && r.status === 401) {
-                    const fresh = await this._malRefreshAccess(ml);
-                    if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
-                }
-            } catch (e) { /* same */ }
-        }
+        const pushMl = async () => {
+            if (ml && ml.accessToken && t.malId) {
+                try {
+                    const malStatus = (t.eps && progress >= t.eps) ? 'completed' : 'watching';
+                    let r = await this._malRelayPost('/mal/update', { access_token: ml.accessToken, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                    if (!r.ok && r.status === 401) {
+                        const fresh = await this._malRefreshAccess(ml);
+                        if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                    }
+                } catch (e) { /* same */ }
+            }
+        };
+        await Promise.allSettled([pushAl(), pushSk(), pushMl()]);
         this.trackingListsAt = 0;
         /* Marks change tracker data, so every cached tab goes stale:
            each one still shows instantly on next switch, then
@@ -4810,6 +4831,35 @@ const App = {
             grid.innerHTML = this.libraryLocalHTML();
             return;
         }
+        /* Heal a tab/preference divergence: the visible tab is the
+           user's selection, so when it names a connected tracker
+           but the preference drifted (Back-button return after a
+           profile switch, or a cloud settings merge reverting it),
+           adopt the tab as the preference and restore its cached
+           list — exactly as tapping the tab would. Without this,
+           a connected tab showed the "not connected" card whenever
+           the preference and the tab disagreed. */
+        if (this.activeTrackerName() !== source) {
+            const srcConn0 = source === 'AniList' ? Storage.getAnilistConn()
+                : source === 'Simkl' ? Storage.getSimklConn()
+                : source === 'MyAnimeList' ? Storage.getMalConn() : null;
+            if (srcConn0 && (srcConn0.accessToken || (source === 'MyAnimeList' && srcConn0.listsCache))) {
+                this.trackingError = '';
+                Storage.updateSetting('librarySource', source);
+                const cached = this.trackingCache[source];
+                if (cached) {
+                    this.trackingLists = cached.lists;
+                    this.trackingListsAt = cached.at;
+                    this.trackingListsProvider = source;
+                    if (Date.now() - cached.at > 60000) {
+                        this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
+                    }
+                } else {
+                    this.trackingLists = null;
+                    this.trackingListsAt = 0;
+                }
+            }
+        }
         const active = this.activeTrackerName();
         const conn = active === 'AniList' ? Storage.getAnilistConn()
             : active === 'Simkl' ? Storage.getSimklConn()
@@ -4841,6 +4891,19 @@ const App = {
             grid.innerHTML = '<div class="search-grid">' + Array.from({ length: 12 }, () => '<div class="skl-card"></div>').join('') + '</div>';
             this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
             return;
+        }
+        /* Stale display: a mark on Details only zeroes the
+           timestamps, it never re-fetches Library — so coming back
+           here kept showing old bars until a tab switch. Mirror
+           setLibrarySource: keep showing the stale list, refresh
+           it in the background. The cooldown stops a failed
+           refresh from re-kicking on every re-render. */
+        const staleAt = this.trackingListsAt || 0;
+        if (staleAt === 0 || Date.now() - staleAt > 60000) {
+            if (!this.trackingFetch && Date.now() - (this._libBgAt || 0) > 30000) {
+                this._libBgAt = Date.now();
+                this.fetchTrackingLists().then(() => { if (this.currentScreen === 'screen-library') this.renderLibrary(); });
+            }
         }
         const groups = this.libraryFilter === 'ALL'
             ? AniList.LIST_STATUSES.map(s => (this.trackingLists[s.key] || {}).entries || [])

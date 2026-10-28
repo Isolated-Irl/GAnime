@@ -253,13 +253,17 @@ const AniList = {
         return media.map(m => this.mapMedia(m));
     },
 
-    /* Batch-hydrate MAL IDs into full GAnime titles (50 a page) */
+    /* Batch-hydrate MAL IDs into full GAnime titles (50 a page).
+       Chunks run in parallel (no cap — capping would silently drop
+       artwork/metadata for big lists): a ~600-title Simkl/MAL list
+       used to pay 12-13 sequential round-trips, one after another. */
     async byMalIds(malIds) {
         const clean = Array.from(new Set((malIds || []).map(x => parseInt(x, 10)).filter(Boolean)));
         if (!clean.length) return {};
         const byMal = {};
-        for (let i = 0; i < clean.length; i += 50) {
-            const chunk = clean.slice(i, i + 50);
+        const chunks = [];
+        for (let i = 0; i < clean.length; i += 50) chunks.push(clean.slice(i, i + 50));
+        const results = await Promise.allSettled(chunks.map(async (chunk) => {
             const query = `query ($ids: [Int]) {
                 Page(page: 1, perPage: 50) {
                     media(type: ANIME, idMal_in: $ids) { ${this.FIELDS} }
@@ -267,12 +271,14 @@ const AniList = {
             }`;
             try {
                 const data = await this._post(query, { ids: chunk });
-                ((data && data.Page && data.Page.media) || []).forEach(m => {
-                    const mapped = this.mapMedia(m);
-                    if (mapped.malId) byMal[mapped.malId] = mapped;
-                });
-            } catch (e) { /* a failed chunk just leaves those unhydrated */ }
-        }
+                return ((data && data.Page && data.Page.media) || []).map(m => this.mapMedia(m));
+            } catch (e) { /* a failed chunk just leaves those unhydrated */ return []; }
+        }));
+        results.forEach(r => {
+            if (r.status === 'fulfilled') r.value.forEach(mapped => {
+                if (mapped.malId) byMal[mapped.malId] = mapped;
+            });
+        });
         return byMal;
     },
 

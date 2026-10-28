@@ -171,11 +171,17 @@ body.amoled-black { --bg-surface: #000000; --bg-elevated: #000000; --bg-card: #0
     background: rgba(0, 0, 0, 0.66);
     backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     display: flex; align-items: center; justify-content: center; padding: 20px;
+    overflow-y: auto;
 }
 .modal-card {
     background: var(--bg-elevated); border: 1px solid var(--border-subtle);
     border-radius: var(--radius-card); padding: 22px;
     width: 100%; max-width: 400px;
+    /* Tall editors (tracking editor: 3 provider cards + sliders)
+       used to overflow the flex container with no scroll area of
+       their own, so scrolls fell through to the page behind. The
+       card now caps to viewport height and scrolls internally. */
+    max-height: calc(100dvh - 40px); overflow-y: auto;
     display: flex; flex-direction: column; gap: 14px; text-align: center;
 }
 .modal-title { font-size: 19px; font-weight: 800; }
