@@ -2424,7 +2424,8 @@ const App = {
         return t ? {
             title: t.title, poster: t.poster || '', cover: t.cover || '',
             total: t.eps || 0, anilistId: t.anilistId || null, malId: t.malId || null,
-            year: t.year || '', hue: t.hue || 210, type: t.type || 'TV'
+            year: t.year || '', hue: t.hue || 210, type: t.type || 'TV',
+            nextEp: t.nextEp || null
         } : null;
     },
 
@@ -2744,7 +2745,7 @@ const App = {
                 score: alEntry && alEntry.score ? alEntry.score : 0,
                 start: '', finish: '', notes: '', dirty: false
             },
-            simkl: { status: skEntry ? (statusMap[skEntry.status] || 'Watching') : 'Watching', progress: skEntry ? (skEntry.progress || 0) : localCount, score: 0, memo: '', priv: false, dirty: false },
+            simkl: { status: skEntry ? (statusMap[skEntry.status] || 'Watching') : 'Watching', origStatus: skEntry ? (statusMap[skEntry.status] || 'Watching') : null, statusTouched: false, progress: skEntry ? (skEntry.progress || 0) : localCount, score: 0, memo: '', priv: false, dirty: false },
             mal: {
                 status: malEntry ? (malStatusMap[malEntry.status] || 'Watching') : 'Watching',
                 progress: malEntry ? (malEntry.progress || 0) : localCount,
@@ -2772,6 +2773,7 @@ const App = {
         if (!d) return;
         d[service][field] = value;
         d[service].dirty = true;
+        if (service === 'simkl' && field === 'status') d.simkl.statusTouched = true;
         this._teSyncFooter();
     },
 
@@ -2888,7 +2890,7 @@ const App = {
                     <span class="te-label">🔒 Private Entry on Simkl</span>
                     <label class="switch"><input type="checkbox" ${d.simkl.priv ? 'checked' : ''} onchange="App._teSet('simkl','priv', this.checked)"><span class="switch-track"></span></label>
                 </div>
-                <div class="te-note">Only watched episodes are pushed to Simkl from this editor — score, memo and privacy are not synced yet.</div>` : ''}
+                <div class="te-note">Watched episodes and status changes are pushed to Simkl from this editor — score, memo and privacy are not synced yet.</div>` : ''}
                 ${resLine('simkl')}
             </div>
             <div class="te-footer">
@@ -2939,7 +2941,13 @@ const App = {
             const sk = Storage.getSimklConn();
             if (sk && sk.accessToken) {
                 try {
-                    await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress, d.simkl.status);
+                    /* Status rides the history call only when the
+                       user actually changed it (touched the select,
+                       or it differs from the cached entry): sending
+                       the fallback 'Watching' on an episodes-only
+                       save would wrongly flip a Completed show. */
+                    const statusToSend = (d.simkl.statusTouched || (d.simkl.origStatus && d.simkl.status !== d.simkl.origStatus)) ? d.simkl.status : null;
+                    await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, d.simkl.progress, statusToSend);
                     d.results.simkl = { ok: true, msg: 'Simkl — history saved ✓' };
                     d.simkl.dirty = false;
                     /* Same invalidation the AniList and MAL blocks
@@ -4837,9 +4845,15 @@ const App = {
             const t = entryTitle(id);
             const total = t.eps || 0;
             const seen = ((watchedMap[id] || {}).eps || []).length;
-            const pct = total ? Math.min(100, Math.round((seen / total) * 100)) : 0;
+            /* Same caught-up rule as the tracker cards: no total +
+               airing show fills against episodes out so far, and
+               no bar at all when neither is known. */
+            const aired = (!total && t.nextEp) ? (t.nextEp - 1) : 0;
+            const denom = total || aired;
+            const pct = denom ? Math.min(100, Math.round((seen / denom) * 100)) : 0;
+            const bar = denom ? `<div class="lib-prog"><div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div></div>` : '';
             const badge = `<span class="lib-ep-badge">${total ? seen + '/' + total : seen}</span>`;
-            return `<div class="lib-item">${this.posterCardHTML(t, badge)}<div class="lib-prog"><div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div></div></div>`;
+            return `<div class="lib-item">${this.posterCardHTML(t, badge)}${bar}</div>`;
         }).join('');
         const savedIds = ids.filter(id => (lib[id].savedEps || []).length);
         const savedHTML = savedIds.length ? `
@@ -4967,10 +4981,19 @@ const App = {
     libraryCardHTML(e) {
         const t = e.media;
         const total = t.eps || 0;
-        const pct = total ? Math.min(100, Math.round((e.progress / total) * 100)) : 0;
+        /* Caught-up bar (all tabs): with no announced total, an
+           airing show fills against episodes out so far (nextEp -
+           1), so the bar moves as you watch and as new episodes
+           drop. With neither a total nor a next episode, no bar
+           renders at all — a 0% bar would wrongly read as
+           "nothing watched". */
+        const aired = (!total && t.nextEp) ? (t.nextEp - 1) : 0;
+        const denom = total || aired;
+        const pct = denom ? Math.min(100, Math.round((e.progress / denom) * 100)) : 0;
+        const bar = denom ? `<div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div>` : '';
         return `<div class="lib-item">
             ${this.posterCardHTML(t)}
-            <div class="lib-prog"><div class="wavy-track"><div class="wavy-fill" style="width:${pct}%"></div></div>
+            <div class="lib-prog">${bar}
             <span>${e.progress}${total ? ' / ' + total : ''} eps</span></div>
         </div>`;
     },

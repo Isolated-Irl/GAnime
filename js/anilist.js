@@ -536,34 +536,33 @@ const Trackers = {
         return out;
     },
 
-    /* Simkl progress (+ optional status). History uses the nested
-       seasons shape Simkl documents; status goes through
-       /sync/add-to-list, which history alone never changes. Both
-       responses are checked — previously a failed request still
-       reported "history saved ✓" because fetch only throws on
-       network errors, never on HTTP errors. */
+    /* Simkl progress (+ optional status) in ONE history call.
+       Simkl's docs steer sync flows to /sync/history, which
+       carries status per item; /sync/add-to-list is only for
+       explicit watchlist buttons, and it 403s for this flow —
+       and a status failure there used to abort the episode push
+       entirely. One call means that can't happen. A status-only
+       change sends history with status and no seasons. Failures
+       throw so the editor reports them instead of a false ✓. */
     async simklSaveProgress(clientId, token, t, progress, status) {
         const ids = {};
         if (t.malId) ids.mal = t.malId;
         if (t.anilistId) ids.anilist = t.anilistId;
-        const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId };
-        if (status) {
-            const simklStatusMap = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plantowatch', 'On Hold': 'hold', 'Dropped': 'dropped', 'Rewatching': 'watching' };
-            const rStatus = await fetch(this.SIMKL_API + '/sync/add-to-list', {
-                method: 'POST', headers,
-                body: JSON.stringify({ shows: [{ to: simklStatusMap[status] || 'watching', title: t.title, ids }] })
-            });
-            if (!rStatus.ok) throw new Error('Simkl status update failed (' + rStatus.status + ')');
-        }
+        const simklStatusMap = { 'Watching': 'watching', 'Completed': 'completed', 'Plan to Watch': 'plantowatch', 'On Hold': 'hold', 'Dropped': 'dropped', 'Rewatching': 'watching' };
+        const show = { title: t.title, ids };
+        if (status) show.status = simklStatusMap[status] || 'watching';
         if (progress > 0) {
             const episodes = [];
             for (let i = 1; i <= progress; i++) episodes.push({ number: i });
-            const rHist = await fetch(this.SIMKL_API + '/sync/history', {
-                method: 'POST', headers,
-                body: JSON.stringify({ shows: [{ title: t.title, ids, seasons: [{ number: 1, episodes }] }] })
-            });
-            if (!rHist.ok) throw new Error('Simkl history update failed (' + rHist.status + ')');
+            show.seasons = [{ number: 1, episodes }];
         }
+        if (!show.status && !show.seasons) return; // nothing to send
+        const r = await fetch(this.SIMKL_API + '/sync/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId },
+            body: JSON.stringify({ shows: [show] })
+        });
+        if (!r.ok) throw new Error('Simkl history update failed (' + r.status + ')');
     },
 
     /* MAL: parse an api.myanimelist.net v2 animelist response
