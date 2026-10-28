@@ -48,17 +48,48 @@ const AniList = {
         return json.data;
     },
 
-    async _page(mediaArgs, variables, perPage) {
+    async _page(mediaArgs, variables, perPage, page) {
         const decl = variables && variables.decl ? ', ' + variables.decl : '';
         const query = `query ($page: Int, $perPage: Int${decl}) {
             Page(page: $page, perPage: $perPage) {
                 media(type: ANIME, isAdult: false, ${mediaArgs}) { ${this.FIELDS} }
             }
         }`;
-        const vars = Object.assign({ page: 1, perPage: perPage || 20 }, (variables && variables.values) || {});
+        const vars = Object.assign({ page: page || 1, perPage: perPage || 20 }, (variables && variables.values) || {});
         const data = await this._post(query, vars);
         const media = (data && data.Page && data.Page.media) || [];
         return media.map(m => this.mapMedia(m));
+    },
+
+    /* See-All pages: the Home rails only ever hold 18 titles
+       (homeBatch perPage 18), so View All used to just re-show
+       those 18 — "Top 100" with 18 titles. This re-runs the SAME
+       filter as the rail, paged in 50s (AniList's perPage cap)
+       up to `limit` (default 100), and stops early when a page
+       comes back short (list exhausted). Unknown rail titles
+       return null so the caller keeps the 18 already on screen. */
+    async fetchSeeAll(title, curSeason, curYear, nextSeason, nextYear, limit) {
+        const seasonVars = (season, year) => ({ decl: '$season: MediaSeason, $year: Int', values: { season, year } });
+        const spec = {
+            'Trending Now': { args: 'sort: TRENDING_DESC', vars: null },
+            'Popular This Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(curSeason, curYear) },
+            'Upcoming Next Season': { args: 'season: $season, seasonYear: $year, sort: POPULARITY_DESC', vars: seasonVars(nextSeason, nextYear) },
+            'All Time Popular': { args: 'sort: POPULARITY_DESC', vars: null },
+            'Top 100 Anime': { args: 'sort: SCORE_DESC', vars: null },
+            'Top 100 Movies': { args: 'format: MOVIE, sort: SCORE_DESC', vars: null },
+        }[title];
+        if (!spec) return null;
+        const target = limit || 100;
+        const out = [];
+        let page = 1;
+        while (out.length < target) {
+            const want = Math.min(50, target - out.length);
+            const chunk = await this._page(spec.args, spec.vars, want, page);
+            out.push.apply(out, chunk);
+            if (chunk.length < want) break;
+            page++;
+        }
+        return out;
     },
 
     _cleanDesc(desc) {

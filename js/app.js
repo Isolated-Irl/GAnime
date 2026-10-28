@@ -1029,12 +1029,20 @@ const App = {
     shellLaunched: false,
 
     /* ---------- Calendar: day strip + week navigation + row list ---------- */
-    calPool: null,        // live entries grouped by JS weekday; null = no data yet (skeletons)
+    calPool: null,        // live entries grouped by LOCAL DATE (YYYY-MM-DD); null = no data yet (skeletons)
     calLoading: false,      // a calendar fetch is in flight (prevents dupes)
+    _calPoolAt: 0,          // when the shown pool was fetched / cached (drives the 30min rule mid-session)
     _calStale: false,       // cached pool older than 30min — show it, refresh behind it
     calFailed: false,       // last calendar fetch failed — tab visits retry, footer offers Retry
     calWeekOffset: 0,     // 0 = this week, -1 = last week, +1 = next week…
     calSelectedIdx: null, // 0 = Monday … 6 = Sunday (defaults to today)
+
+    /* Local-date key (YYYY-MM-DD) for calendar pools. Local,
+       not UTC: an episode airing Monday night IST must not
+       land on Sunday via toISOString. */
+    _calDateKey(date) {
+        return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    },
 
     renderCalendar() {
         const root = document.getElementById('calendarRoot');
@@ -1048,31 +1056,42 @@ const App = {
         sunday.setDate(monday.getDate() + 6);
         const rangeLabel = monday.toLocaleString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
             sunday.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        /* Layout Phase 3: the calendar cache lives in localStorage
-           (v2, with a timestamp) so a new session still opens
-           instantly. Up to 6h old is accepted; older than 30min
-           shows immediately and refreshes behind it (_calStale).
-           A failed pool retries on every tab visit. */
+        /* Calendar fix (2026-10-28): pools are keyed by DATE,
+           not weekday — weekday buckets showed the same titles
+           on every week (next week = this week's shows) and the
+           strip counts never changed across weeks. An old
+           weekday-keyed pool is discarded, not rendered. */
         if (!this.calPool) {
             try {
                 const raw = JSON.parse(localStorage.getItem('ganime_cal_pool_v2') || 'null');
                 if (raw && raw.pool && typeof raw.pool === 'object') {
+                    const keys = Object.keys(raw.pool);
+                    const dated = !keys.length || /^\d{4}-\d{2}-\d{2}$/.test(keys[0]);
                     const age = Date.now() - (raw.at || 0);
-                    if (age <= 6 * 3600 * 1000) {
+                    if (dated && age <= 6 * 3600 * 1000) {
                         this.calPool = raw.pool;
+                        this._calPoolAt = raw.at || 0;
                         this._calStale = age > 30 * 60 * 1000;
                     }
                 }
             } catch (e) { /* corrupt cache — fetch fresh below */ }
         }
+        /* Calendar fix (2026-10-28): staleness is re-checked on
+           every render, not just at cache-load time. Before,
+           a pool loaded fresh stayed "fresh" for the whole
+           session no matter how old it got, and a failed
+           background refresh cleared the flag up front — so
+           after one failure the calendar never tried AniList
+           again. Now a >30min pool re-arms _calStale here,
+           and only a successful fetch clears it. */
+        if (this.calPool && this._calPoolAt && Date.now() - this._calPoolAt > 30 * 60 * 1000) this._calStale = true;
         const pool = this.calPool || {};
         const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
         const strip = dayNames.map((name, i) => {
             const date = new Date(monday);
             date.setDate(monday.getDate() + i);
-            const weekday = date.getDay();
-            const count = (pool[weekday] || []).length;
+            const count = (pool[this._calDateKey(date)] || []).length;
             const isToday = date.toDateString() === now.toDateString();
             return `
                 <button class="cal2-day ${i === this.calSelectedIdx ? 'selected' : ''} ${isToday ? 'is-today' : ''}" onclick="App.calSelect(${i})">
@@ -1084,7 +1103,7 @@ const App = {
 
         const selectedDate = new Date(monday);
         selectedDate.setDate(monday.getDate() + this.calSelectedIdx);
-        const entries = (pool[selectedDate.getDay()] || []).slice().sort((a, b) => (a.minutes || 0) - (b.minutes || 0));
+        const entries = (pool[this._calDateKey(selectedDate)] || []).slice().sort((a, b) => (a.minutes || 0) - (b.minutes || 0));
         /* Layout Phase 3: no fake titles, ever. No pool + no
            failure = still loading -> skeletons. No pool +
            failure = no rows (the footer carries the error +
@@ -1156,10 +1175,6 @@ const App = {
 
     async loadLiveCalendar() {
         if (this.calLoading) return;
-        /* Layout Phase 3: a refresh clears the stale flag up
-           front — a failed refresh simply leaves the shown pool
-           as-is (no error banner over cached data). */
-        this._calStale = false;
         this.calLoading = true;
         try {
             const shows = await AniList.airing(50);
@@ -1169,7 +1184,7 @@ const App = {
                 if (!t.nextRelease) return;
                 const d = new Date(t.nextRelease);
                 const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-                const key = d.getDay();
+                const key = this._calDateKey(d);
                 if (!grouped[key]) grouped[key] = [];
                 grouped[key].push({
                     name: t.title,
@@ -1186,6 +1201,12 @@ const App = {
                timestamp for the 6h / 30min rules. */
             this.calPool = grouped;
             this.calFailed = false;
+            /* Calendar fix (2026-10-28): the stale flag clears
+               ONLY here, on success. Clearing it up front meant
+               a failed refresh left the pool looking fresh, so
+               the calendar never retried AniList again. */
+            this._calPoolAt = Date.now();
+            this._calStale = false;
             if (Object.keys(grouped).length) {
                 try { localStorage.setItem('ganime_cal_pool_v2', JSON.stringify({ at: Date.now(), pool: grouped })); } catch (e) {}
             }
@@ -1193,7 +1214,9 @@ const App = {
         } catch (e) {
             /* No pool -> skeletons give way to the error text +
                Retry; a cached pool stays on screen untouched and
-               the next tab visit retries automatically. */
+               the next tab visit retries automatically (the
+               stale flag survives the failure, so the trigger
+               in renderCalendar fires again). */
             this.calFailed = true;
             this.renderCalendar();
         } finally {
@@ -1266,6 +1289,8 @@ const App = {
     heroList: null,      // live hero titles (AniList); null = sample fallback
     liveRails: null,     // live rails (AniList); null = not loaded yet
     homeLiveFailed: false, // true only after a fetch round produced nothing
+    homeRefreshFailed: false, // a background refresh failed while old rails stay on screen
+    _homeFetching: false, // in-flight guard (lastHomeFetch stamps only on success now)
 
     cacheTitles(list) {
         (list || []).forEach(t => { if (t && t.id) this.titleCache[t.id] = t; });
@@ -1553,7 +1578,13 @@ const App = {
             return;
         }
         if (this.liveRails) {
-            rails.innerHTML = this.liveRails.map((rail, i) => {
+            /* A failed background refresh over old rails shows a
+               Retry bar (same pattern as Library's chip) instead
+               of leaving silent stale rails on screen. */
+            const refreshBar = this.homeRefreshFailed
+                ? `<div style="margin:0 0 12px"><span class="text-secondary">Couldn't refresh Home</span> <button class="btn-secondary" onclick="App.homeRefreshFailed=false; App.renderHome()">Retry</button></div>`
+                : '';
+            rails.innerHTML = refreshBar + this.liveRails.map((rail, i) => {
                 const key = 'rail' + i;
                 this.railStore[key] = rail;
                 return `
@@ -1576,18 +1607,33 @@ const App = {
     },
 
     /* ---------- See-All page (rail arrow → full grid) ---------- */
-    openSeeAll(key) {
+    async openSeeAll(key) {
         const entry = this.railStore[key];
         if (!entry) return;
         const box = document.getElementById('seeAllRoot');
-        if (box) {
+        const render = (items) => {
+            if (!box) return;
             box.innerHTML = `
                 <button class="back-btn" onclick="App.goBack()">←</button>
                 <div class="panel-title" style="margin-top:14px">${entry.title}</div>
-                <div class="section-label">${entry.items.length} TITLES</div>
-                <div class="search-grid">${entry.items.map(t => this.posterCardHTML(t)).join('')}</div>`;
-        }
+                <div class="section-label">${items.length} TITLES</div>
+                <div class="search-grid">${items.map(t => this.posterCardHTML(t)).join('')}</div>`;
+        };
+        /* The rail's 18 render instantly; the full list lands
+           behind them. A failed fetch simply keeps the 18. */
+        render(entry.items);
         this.navigate('screen-seeall');
+        if (entry._seeAllLoaded) return;
+        try {
+            const cur = AniList.currentSeason();
+            const nxt = AniList.nextSeason();
+            const items = await AniList.fetchSeeAll(entry.title, cur.season, cur.year, nxt.season, nxt.year);
+            if (items && items.length) {
+                entry.items = items;
+                entry._seeAllLoaded = true;
+                render(items);
+            }
+        } catch (e) { /* keep the 18 already on screen */ }
     },
 
     /* Fetch live data from AniList (sole source). Sample content
@@ -1617,13 +1663,19 @@ const App = {
                 }
             } catch (e) { /* corrupt cache — fetch fresh below */ }
         }
-        this.lastHomeFetch = Date.now();
+        /* In-flight guard: lastHomeFetch is stamped only on a
+           successful fetch now (below), so without this a second
+           Home visit during a fetch would fire a duplicate
+           AniList request. */
+        if (this._homeFetching) return;
+        this._homeFetching = true;
         try {
             const cur = AniList.currentSeason();
             const nxt = AniList.nextSeason();
             const rails = await AniList.homeBatch(cur.season, cur.year, nxt.season, nxt.year);
             if (!rails || !rails.length) {
                 if (!this.liveRails) this.homeLiveFailed = true;
+                else this.homeRefreshFailed = true;
                 this.renderHero();
                 this.renderRails();
                 return;
@@ -1631,6 +1683,14 @@ const App = {
             rails.forEach(r => this.cacheTitles(r.items));
             try { sessionStorage.setItem('ganime_home_rails', JSON.stringify(rails)); sessionStorage.setItem('ganime_home_ts', String(Date.now())); } catch (e) {}
             this.homeLiveFailed = false;
+            this.homeRefreshFailed = false;
+            /* Stamp ONLY on success: the old pre-fetch stamp meant
+               a failed refresh looked fresh for 45s, so the next
+               Home visit did nothing and the stale rails just sat
+               there with no error and no retry. A failure now
+               keeps the old stamp, so the next visit retries at
+               once. */
+            this.lastHomeFetch = Date.now();
             this.dataSource = 'ANILIST';
             const trending = rails.find(r => r.title === 'Trending Now') || rails[0];
             this.heroList = trending.items.slice(0, 4);
@@ -1640,10 +1700,15 @@ const App = {
             this.renderRails();
         } catch (e) {
             /* A cached Home keeps showing — only a cold boot with
-               nothing cached may show the Retry card. */
+               nothing cached may show the Retry card. With old
+               rails on screen, the failure is now VISIBLE (a Retry
+               bar above the rails) instead of silent stale data. */
             if (!this.liveRails) this.homeLiveFailed = true;
+            else this.homeRefreshFailed = true;
             this.renderHero();
             this.renderRails();
+        } finally {
+            this._homeFetching = false;
         }
     },
 
@@ -5581,7 +5646,11 @@ const App = {
            lands identical data must not rewrite hundreds of cards
            and flicker the screen. The chip rides on the same grid
            write, so a failed refresh adds it without wiping. */
-        const listSig = entries.map(e => e.entryId + ':' + e.status + ':' + (e.progress || 0)).join('|');
+        /* The sig also covers total + next episode: a refresh
+           that only announces a total or drops a new episode
+           used to leave the card's old text on screen, because
+           status/progress alone hadn't changed. */
+        const listSig = entries.map(e => e.entryId + ':' + e.status + ':' + (e.progress || 0) + ':' + ((e.media && e.media.eps) || 0) + ':' + ((e.media && e.media.nextEp) || 0)).join('|');
         const sig = source + '|' + this.libraryFilter + '|' + this.librarySort + '|' + (this.trackingRefreshError ? 'ERR' : '') + '|' + listSig;
         const refreshChip = this.trackingRefreshError
             ? `<div style="margin:0 0 12px"><span class="text-secondary">Couldn't refresh</span> <button class="btn-secondary" onclick="App.retryLibrary()">Retry</button></div>`
