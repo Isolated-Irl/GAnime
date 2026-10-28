@@ -4379,26 +4379,38 @@ const App = {
        list back. 401 once -> refresh the token via the relay and
        retry once. Any other failure returns null, and the caller
        falls back to the last pasted cache, then the paste message. */
-    async _fetchMalListsViaRelay() {
+    /* Relay POST wrapper shared by the MAL read + write paths:
+       always { ok, status, data }, never throws — a dead relay is
+       a null/failure, never a crash (the local save is the truth). */
+    async _malRelayPost(path, body) {
         const relay = (Config.OAUTH && Config.OAUTH.RELAY_URL) || '';
+        if (!relay) return { ok: false, status: 0, data: {} };
+        try {
+            const res = await fetch(relay + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok, status: res.status, data };
+        } catch (e) { return { ok: false, status: 0, data: {} }; }
+    },
+
+    /* MAL token refresh via the relay (secret stays in the worker).
+       Saves the new tokens and returns the new access token, or null. */
+    async _malRefreshAccess(mal) {
+        if (!mal || !mal.refreshToken) return null;
+        const ref = await this._malRelayPost('/mal/refresh', { refresh_token: mal.refreshToken });
+        if (!ref.ok || !ref.data.access_token) return null;
+        const token = ref.data.access_token;
+        Storage.saveMalConn({ ...mal, accessToken: token, refreshToken: ref.data.refresh_token || mal.refreshToken, expiresAt: ref.data.expires_in ? Date.now() + ref.data.expires_in * 1000 : 0 });
+        return token;
+    },
+
+    async _fetchMalListsViaRelay() {
         const mal = Storage.getMalConn();
-        if (!relay || !mal || !mal.accessToken) return null;
-        const post = async (path, body) => {
-            try {
-                const res = await fetch(relay + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                const data = await res.json().catch(() => ({}));
-                return { ok: res.ok, status: res.status, data };
-            } catch (e) { return { ok: false, status: 0, data: {} }; }
-        };
+        if (!mal || !mal.accessToken) return null;
         let token = mal.accessToken;
-        let r = await post('/mal/list', { access_token: token });
-        if (!r.ok && r.status === 401 && mal.refreshToken) {
-            const ref = await post('/mal/refresh', { refresh_token: mal.refreshToken });
-            if (ref.ok && ref.data.access_token) {
-                token = ref.data.access_token;
-                Storage.saveMalConn({ ...mal, accessToken: token, refreshToken: ref.data.refresh_token || mal.refreshToken, expiresAt: ref.data.expires_in ? Date.now() + ref.data.expires_in * 1000 : 0 });
-                r = await post('/mal/list', { access_token: token });
-            }
+        let r = await this._malRelayPost('/mal/list', { access_token: token });
+        if (!r.ok && r.status === 401) {
+            const fresh = await this._malRefreshAccess(mal);
+            if (fresh) { token = fresh; r = await this._malRelayPost('/mal/list', { access_token: token }); }
         }
         if (!r.ok || !Array.isArray(r.data.data)) return null;
         const lists = await Trackers.malParseListJson(r.data.data);
@@ -4407,7 +4419,7 @@ const App = {
            refresh-save above isn't clobbered. */
         const fresh = Storage.getMalConn() || mal;
         if (!fresh.user) {
-            const me = await post('/mal/me', { access_token: token });
+            const me = await this._malRelayPost('/mal/me', { access_token: token });
             if (me.ok && me.data.name) Storage.saveMalConn({ ...fresh, user: { id: me.data.id || '', name: me.data.name, avatar: (me.data.picture || '') } });
         }
         return lists;
@@ -4522,6 +4534,22 @@ const App = {
         const sk = Storage.getSimklConn();
         if (sk && sk.accessToken && progress > 0) {
             try { await Trackers.simklSaveProgress(sk.clientId, sk.accessToken, t, progress); } catch (e) { /* same */ }
+        }
+        /* MAL scrobbling: the same mark, the same moment, as
+           AniList/Simkl — the relay PUTs the episode count (MAL's
+           update call adds the title if it is not on the list yet).
+           No MAL id or no token: skip quietly, local first. A 401
+           refreshes once and retries, like the list load. */
+        const ml = Storage.getMalConn();
+        if (ml && ml.accessToken && t.malId) {
+            try {
+                const malStatus = (t.eps && progress >= t.eps) ? 'completed' : 'watching';
+                let r = await this._malRelayPost('/mal/update', { access_token: ml.accessToken, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                if (!r.ok && r.status === 401) {
+                    const fresh = await this._malRefreshAccess(ml);
+                    if (fresh) r = await this._malRelayPost('/mal/update', { access_token: fresh, anime_id: t.malId, status: malStatus, num_watched_episodes: progress });
+                }
+            } catch (e) { /* same */ }
         }
         this.trackingListsAt = 0;
         /* Marks change tracker data, so every cached tab goes stale:
