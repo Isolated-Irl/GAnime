@@ -545,12 +545,32 @@ const Trackers = {
         return null;
     },
 
+    /* Simkl Phase 1: one shared helper for every AUTHENTICATED
+       Simkl call — identification query params, token header,
+       JSON parse, and a structured error ({status, error,
+       message}) so callers can report Simkl's own words instead
+       of a bare status code. The PIN endpoints stay on their own
+       calls: they carry no token. */
+    async _simklFetch(path, opts) {
+        opts = opts || {};
+        const sep = path.indexOf('?') !== -1 ? '&' : '?';
+        const url = this.SIMKL_API + path + sep + 'client_id=' + encodeURIComponent(opts.clientId || '') + '&app-name=ganime&app-version=1.0';
+        const headers = { 'Authorization': 'Bearer ' + opts.token };
+        if (opts.clientId) headers['simkl-api-key'] = opts.clientId;
+        if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+        const r = await fetch(url, { method: opts.method || 'GET', headers: headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+        const data = (r && typeof r.json === 'function') ? await r.json().catch(() => ({})) : {};
+        if (!r.ok) {
+            const err = new Error('Simkl request failed (' + r.status + ') - ' + (data.error || 'error') + ': ' + (data.message || ''));
+            err.simkl = { status: r.status, error: data.error || null, message: data.message || null };
+            throw err;
+        }
+        return { status: r.status, data: data };
+    },
+
     async simklViewer(clientId, token) {
-        const r = await fetch(this.SIMKL_API + '/users/settings', {
-            headers: { 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId }
-        });
-        const j = await r.json().catch(() => null);
-        if (!r.ok || !j || !j.user) throw new Error('Simkl auth check failed (' + r.status + ')');
+        const { data: j } = await this._simklFetch('/users/settings', { clientId: clientId, token: token });
+        if (!j || !j.user) throw new Error('Simkl auth check failed');
         return {
             id: (j.account && j.account.id) || j.user.name,
             name: j.user.name || 'Simkl User',
@@ -590,11 +610,7 @@ const Trackers = {
        place. No await on hydration here — awaiting it was what
        made the tab skeleton until every chunk landed. */
     async simklLists(clientId, token, onDone) {
-        const r = await fetch(this.SIMKL_API + '/sync/all-items/anime/', {
-            headers: { 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId }
-        });
-        if (!r.ok) throw new Error('Simkl sync failed (' + r.status + ')');
-        const j = await r.json().catch(() => null);
+        const { data: j } = await this._simklFetch('/sync/all-items/anime/', { clientId: clientId, token: token });
         const items = Array.isArray(j) ? j : ((j && j.anime) || []);
         const statusMap = { watching: 'CURRENT', completed: 'COMPLETED', hold: 'PAUSED', dropped: 'DROPPED', plantowatch: 'PLANNING' };
         const malIds = items.map(x => x.show && x.show.ids && x.show.ids.mal).filter(Boolean);
@@ -669,12 +685,23 @@ const Trackers = {
             show.seasons = [{ number: 1, episodes }];
         }
         if (!show.status && !show.seasons) return; // nothing to send
-        const r = await fetch(this.SIMKL_API + '/sync/history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'simkl-api-key': clientId },
-            body: JSON.stringify({ shows: [show] })
-        });
-        if (!r.ok) throw new Error('Simkl history update failed (' + r.status + ')');
+        /* Simkl Phase 1: the helper carries the identification
+           params and parses the body; the error is rethrown with
+           Simkl's own error + message, and a 200 that could not
+           match the title is a failure, not a success. A network
+           failure has no .simkl and passes through untouched. */
+        let res;
+        try {
+            res = await this._simklFetch('/sync/history', { clientId: clientId, token: token, method: 'POST', body: { shows: [show] } });
+        } catch (e) {
+            if (e && e.simkl) {
+                const s = e.simkl;
+                throw new Error('Simkl history update failed (' + s.status + ') - ' + (s.error || 'error') + ': ' + (s.message || ''));
+            }
+            throw e;
+        }
+        const nf = res.data && res.data.not_found;
+        if (nf && nf.shows && nf.shows.length) throw new Error('Simkl could not match this title');
     },
 
     /* MAL: parse an api.myanimelist.net v2 animelist response

@@ -4297,7 +4297,19 @@ const App = {
         // Simkl REQUIRES PKCE S256 (live error 2026-10-27:
         // "PKCE S256 is required") — without the challenge it
         // bounces the login before showing its own page.
-        return 'https://simkl.com/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&state=' + encodeURIComponent(state) + '&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=S256';
+        // Simkl Phase 1: WITHOUT a scope Simkl mints a READ-ONLY
+        // token (the 2026-10-28 consent page proved it: profile +
+        // read-only library, no write line), so every write 403s
+        // with insufficient_scope. Refreshing cannot widen scope —
+        // only a reconnect with the scope below can.
+        return 'https://simkl.com/oauth2/authorize?response_type=code&client_id=' + encodeURIComponent(clientId) + '&redirect_uri=' + encodeURIComponent(redirectUri) + '&state=' + encodeURIComponent(state) + '&code_challenge=' + encodeURIComponent(challenge) + '&code_challenge_method=S256' + '&scope=' + encodeURIComponent('media:read media:write');
+    },
+
+    /* Simkl Phase 1: the token response echoes the granted scope
+       (space-separated). Write access is what plain marks and the
+       editor need — without media:write every write 403s. */
+    _simklHasWriteScope(scope) {
+        return !!(scope && scope.split(/\s+/).indexOf('media:write') !== -1);
     },
 
     /* PKCE S256 challenge: base64url(SHA-256(verifier)). Returns
@@ -4353,6 +4365,7 @@ const App = {
         const redirectUri = this._oauthRedirect(provider);
         if (!relay) return;
         try {
+            let simklScope = '';
             if (provider === 'simkl') {
                 const cid = (Config.OAUTH && Config.OAUTH.SIMKL_CLIENT_ID) || '';
                 const verifier = saved.verifier || '';
@@ -4360,7 +4373,11 @@ const App = {
                 const data = await res.json();
                 if (!res.ok || !data.access_token) throw new Error((data && (data.error_description || data.error)) || 'Simkl exchange failed');
                 const user = await Trackers.simklViewer(cid, data.access_token);
-                Storage.saveSimklConn({ clientId: cid, accessToken: data.access_token, user });
+                /* Simkl Phase 1: keep the granted scope with the
+                   connection, so a read-only token is visible
+                   instead of failing writes mysteriously later. */
+                simklScope = data.scope || '';
+                Storage.saveSimklConn({ clientId: cid, accessToken: data.access_token, scope: simklScope, user });
             } else {
                 const cid = (Config.OAUTH && Config.OAUTH.MAL_CLIENT_ID) || '';
                 const verifier = saved.verifier || '';
@@ -4382,6 +4399,18 @@ const App = {
             this.trackingLists = null; this.trackingListsAt = 0; this.trackingError = ''; this.trackingCache = {};
             this.fetchTrackingLists(true);
             if (this.shellLaunched) this._landAfterOAuth(); else this._pendingOAuthLanding = true;
+            /* Simkl Phase 1: land first, then warn — a read-only
+               token stays connected (reads still work), but the
+               user must know writes will 403 until they reconnect
+               with the scope. Shown after landing so the landing
+               render cannot clobber the modal. */
+            if (provider === 'simkl' && !this._simklHasWriteScope(simklScope)) {
+                try {
+                    if (typeof this.openModal === 'function') {
+                        this.openModal(`<h3 class="modal-title">Simkl connected read-only</h3><p class="text-secondary">Simkl connected read-only - disconnect and reconnect</p><button class="btn-secondary" onclick="App.closeModal()">Close</button>`);
+                    }
+                } catch (e2) { /* boot too early for a modal: scope is still stored */ }
+            }
         } catch (e) {
             /* Show the failure: a silent miss here would look like
                "nothing happened" on return, hiding a relay/config bug. */
