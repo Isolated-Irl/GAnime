@@ -884,14 +884,29 @@ const Sync = {
                valid one, and an older copy must never overwrite
                it. A disconnect tombstone beats any conn saved
                at or before it; a re-connect (newer savedAt)
-               beats the tombstone. */
+               beats the tombstone.
+               App parity (2026-10-30): the Android app writes
+               disconnect tombstones INSIDE the tracking entry
+               itself ({disconnectedAt, savedAt}) rather than in
+               deleted.tracking. A disconnectedAt on one side
+               that is newer than (or equal to) the other side's
+               savedAt means a deliberate disconnect — drop the
+               provider entirely instead of resurrecting it.
+               Without this, the website would pull the app's
+               tombstone and push the old conn right back. */
             const tombTracking = ((tomb.tracking || {})[pid]) || {};
             const lt = ls.tracking || {}, ct = cs.tracking || {};
             const mergedTracking = {};
             ['anilist', 'simkl', 'mal'].forEach(prov => {
                 const l = lt[prov], c = ct[prov];
-                const pick = (!l) ? c : (!c) ? l
-                    : ((c.savedAt || 0) >= (l.savedAt || 0) ? c : l);
+                if (!l && !c) return;
+                const lDisc = (l && l.disconnectedAt) || 0;
+                const cDisc = (c && c.disconnectedAt) || 0;
+                const lAt = (l && l.savedAt) || 0;
+                const cAt = (c && c.savedAt) || 0;
+                if (lDisc > 0 && lDisc >= cAt) return;
+                if (cDisc > 0 && cDisc >= lAt) return;
+                const pick = (!l) ? c : (!c) ? l : (cAt >= lAt ? c : l);
                 if (!pick) return;
                 const t = tombTracking[prov];
                 if (t && (pick.savedAt || 0) <= t) return;
