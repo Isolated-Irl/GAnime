@@ -177,16 +177,6 @@ const Sync = {
                 if (!d[kind]) d[kind] = {};
                 if (!d[kind][pid]) d[kind][pid] = {};
                 d[kind][pid][key] = now;
-            } else if (kind === 'tracking') {
-                /* Tracking disconnect (2026-10-28, full sync):
-                   pid = profile, key = provider (anilist/simkl/
-                   mal). Without this, a disconnect on one device
-                   would be resurrected by the other device's
-                   copy on the next merge — the same resurrection
-                   bug tombstones fixed for profiles/addons. */
-                if (!d.tracking) d.tracking = {};
-                if (!d.tracking[pid]) d.tracking[pid] = {};
-                d.tracking[pid][key] = now;
             } else return;
             this._saveDeleted(d);
             this._dirty = true;
@@ -397,13 +387,17 @@ const Sync = {
     markDirty(key) {
         if (this._applying) return;
         if (!key || typeof key !== 'string') return;
+        /* Per-device tracking (2026-10-30): tracking keys never
+           mark dirty. Unknown keys are ignored entirely. */
+        if (/^ganime_tracking_/.test(key)) return;
         const now = Date.now();
         try {
             if (key === 'ganime_profiles_list' || key.startsWith('ganime_profiles_')) {
                 const m = this._meta(); m.profiles = now; this._saveMeta(m);
             } else {
-                const mm = key.match(/^ganime_(settings|addons|watched|locallib|mylist|tracking)_(.+)$/);
-                if (mm) this._touchMeta(mm[2], mm[1], now);
+                const mm = key.match(/^ganime_(settings|addons|watched|locallib|mylist)_(.+)$/);
+                if (!mm) return;
+                this._touchMeta(mm[2], mm[1], now);
             }
         } catch (e) {}
         this._dirty = true;
@@ -513,26 +507,21 @@ const Sync = {
                 } catch (e) { return null; }
             };
             const addonsRaw = raw('ganime_addons_' + pid) || [];
-            const trackingRaw = raw('ganime_tracking_' + pid) || {};
+            /* Tracker logins are PER-DEVICE (2026-10-30): they are
+               never collected into the cloud doc. Tokens live only
+               in this browser's localStorage. */
             byProfile[pid] = {
                 settings: raw('ganime_settings_' + pid) || {},
                 addons: (Array.isArray(addonsRaw) ? addonsRaw : []).map(a => this._cleanAddon(a)).filter(Boolean),
                 watched: raw('ganime_watched_' + pid) || {},
                 locallib: raw('ganime_locallib_' + pid) || {},
                 mylist: raw('ganime_mylist_' + pid) || [],
-                /* Tracker logins, tokens included (full sync
-                   2026-10-28). Shape: { anilist?, simkl?, mal? },
-                   each conn stamped savedAt by storage.js. The
-                   Firebase session itself is never in here —
-                   collectLocal never reads FirebaseAuth. */
-                tracking: (trackingRaw && typeof trackingRaw === 'object') ? trackingRaw : {},
                 _ts: {
                     settings: this._metaFor(pid, 'settings'),
                     addons: this._metaFor(pid, 'addons'),
                     watched: this._metaFor(pid, 'watched'),
                     locallib: this._metaFor(pid, 'locallib'),
-                    mylist: this._metaFor(pid, 'mylist'),
-                    tracking: this._metaFor(pid, 'tracking')
+                    mylist: this._metaFor(pid, 'mylist')
                 }
             };
         });
@@ -623,8 +612,9 @@ const Sync = {
                    a disconnect, never resurrect a stale token.
                    Call sites read conns fresh from Storage, so
                    an adopted login takes effect without a reload
-                   (the next tracker call reads the new conn). */
-                try { localStorage.setItem('ganime_tracking_' + pid, JSON.stringify(s.tracking || {})); } catch (e) {}
+                   (the next tracker call reads the new conn).
+                   REMOVED 2026-10-30: tracker logins are per-device
+                   now, never written from the cloud. */
                 /* Adopt the cloud store timestamps so the next
                    merge compares correctly. */
                 if (s._ts) {
@@ -877,49 +867,18 @@ const Sync = {
                 if ((cs.mylist || []).includes(title) && (cTs.mylist || 0) > t) return true;
                 return false;
             });
-            /* Tracking logins (full sync 2026-10-28): per
-               provider, the NEWEST conn wins (savedAt, stamped
-               by storage.js; missing = 0). Newest-wins matters
-               because tokens rotate: the freshest token is the
-               valid one, and an older copy must never overwrite
-               it. A disconnect tombstone beats any conn saved
-               at or before it; a re-connect (newer savedAt)
-               beats the tombstone.
-               App parity (2026-10-30): the Android app writes
-               disconnect tombstones INSIDE the tracking entry
-               itself ({disconnectedAt, savedAt}) rather than in
-               deleted.tracking. A disconnectedAt on one side
-               that is newer than (or equal to) the other side's
-               savedAt means a deliberate disconnect — drop the
-               provider entirely instead of resurrecting it.
-               Without this, the website would pull the app's
-               tombstone and push the old conn right back. */
-            const tombTracking = ((tomb.tracking || {})[pid]) || {};
-            const lt = ls.tracking || {}, ct = cs.tracking || {};
-            const mergedTracking = {};
-            ['anilist', 'simkl', 'mal'].forEach(prov => {
-                const l = lt[prov], c = ct[prov];
-                if (!l && !c) return;
-                const lDisc = (l && l.disconnectedAt) || 0;
-                const cDisc = (c && c.disconnectedAt) || 0;
-                const lAt = (l && l.savedAt) || 0;
-                const cAt = (c && c.savedAt) || 0;
-                if (lDisc > 0 && lDisc >= cAt) return;
-                if (cDisc > 0 && cDisc >= lAt) return;
-                const pick = (!l) ? c : (!c) ? l : (cAt >= lAt ? c : l);
-                if (!pick) return;
-                const t = tombTracking[prov];
-                if (t && (pick.savedAt || 0) <= t) return;
-                mergedTracking[prov] = pick;
-            });
-            ls.tracking = mergedTracking;
+            /* Tracking is PER-DEVICE (2026-10-30): never merged,
+               never read from the cloud. Each device keeps its
+               own tracker logins in localStorage. Strip any
+               tracking field so stale cloud tokens never ride
+               in the merged doc. */
+            delete ls.tracking;
             ls._ts = {
                 settings: Math.max(lTs.settings || 0, cTs.settings || 0),
                 addons: Math.max(lTs.addons || 0, cTs.addons || 0),
                 watched: Math.max(lTs.watched || 0, cTs.watched || 0),
                 locallib: Math.max(lTs.locallib || 0, cTs.locallib || 0),
-                mylist: Math.max(lTs.mylist || 0, cTs.mylist || 0),
-                tracking: Math.max(lTs.tracking || 0, cTs.tracking || 0)
+                mylist: Math.max(lTs.mylist || 0, cTs.mylist || 0)
             };
             merged.byProfile[pid] = ls;
         });

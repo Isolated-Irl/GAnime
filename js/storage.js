@@ -32,16 +32,16 @@ const Storage = {
         }
         /* Phase 2 cloud sync (2026-10-26): user-data writes mark
            the store dirty so Sync pushes a batched copy after a
-           short debounce. Tracking keys JOINED this list on
-           2026-10-28 (user-authorized full sync: tracker logins
-           now sync to the owner's cloud doc); caches and the
-           Firebase session itself still never match.
+           short debounce. Tracking keys LEFT this list on
+           2026-10-30 (tracker logins are per-device now, never
+           synced); caches and the Firebase session itself still
+           never match.
            Guarded for the script order (storage loads before
            firestore.js) and for applies (Sync skips while applying). */
         try {
             if (typeof Sync !== 'undefined' && Sync.markDirty
                 && (key.startsWith('ganime_profiles_')
-                    || /^ganime_(settings|addons|watched|locallib|mylist|tracking)_/.test(key))) {
+                    || /^ganime_(settings|addons|watched|locallib|mylist)_/.test(key))) {
                 Sync.markDirty(key);
             }
         } catch (e) {}
