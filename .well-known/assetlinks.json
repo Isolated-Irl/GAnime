@@ -1,1 +1,15 @@
-[{"relation": ["delegate_permission/common.handle_all_urls"], "target": {"namespace": "android_app", "package_name": "com.isolated.ganime", "sha256_cert_fingerprints": ["55A763FD20264C9B8C86B580D7A42E8F3CD6250ABDB28D6129B02C1AD559CC7E"]}}]
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.isolated.ganime",
+      "sha256_cert_fingerprints": [
+        "55A763FD20264C9B8C86B580D7A42E8F3CD6250ABDB28D6129B02C1AD559CC7E",
+        "43:A5:5F:58:7A:3B:78:80:80:F9:9D:72:7E:9E:6F:67:E1:53:5D:A4:00:EF:08:6C:A3:48:B2:4A:33:E9:24:D4"
+      ]
+    }
+  }
+]
