@@ -1,0 +1,1 @@
+[{"relation": ["delegate_permission/common.handle_all_urls"], "target": {"namespace": "android_app", "package_name": "com.isolated.ganime", "sha256_cert_fingerprints": ["55A763FD20264C9B8C86B580D7A42E8F3CD6250ABDB28D6129B02C1AD559CC7E"]}}]
